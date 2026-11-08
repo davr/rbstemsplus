@@ -2,6 +2,8 @@
 
 > **Branch `claude/dml-model`** (off `claude/affectionate-ride-f082bb` at 70e3774): case B, the fixed-shape DirectML model. Built and tested here (bridge suite 120, Core tests 112); the CI build and `windows-test-6dml` are the next check, then the user's `bridge.log`. See GPU.md.
 
+> **GPU test machine (docs only, nothing set up yet):** how to create the AWS Windows GPU machine and register it as a runner: [GPU-RUNNER.md](GPU-RUNNER.md); a design for starting and stopping it automatically: [GPU-AUTOSTOP.md](GPU-AUTOSTOP.md) (not built); ways to work on it interactively, including Claude on the machine: [GPU-INTERACTIVE.md](GPU-INTERACTIVE.md) (a proposal). The repo side that exists: the harness `bench` mode, `scripts/gpu-bench.sh`, `.github/workflows/windows-gpu.yml`, `scripts/gpu-runner-setup.ps1`, `scripts/gpu-runner-bootstrap.ps1`.
+
 > **Current state (2026-11-08, paused at the user's request).** Read "Where things stand" first.
 
 ## Where things stand
