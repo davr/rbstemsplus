@@ -61,6 +61,7 @@ Other files:
 - **Saved stems:** `%LOCALAPPDATA%\rbstemsplus\Cache`, or a folder named
   `RB Stems Plus Cache` on an external drive, chosen in Settings.
 - **Settings:** `%APPDATA%\rbstemsplus\config.ini`.
+- **GPU:** `gpu=1` (the default) makes Stems Cache run Demucs v4 on the GPU through rekordbox's DirectML; `gpu=0` (or the Settings checkbox) keeps it on the CPU. The bridge falls back to the CPU if DirectML fails, and `bridge.log` says which one ran.
 - **Logs:** `%LOCALAPPDATA%\rbstemsplus\Logs`.
 - **The copy of Pioneer's ONNX Runtime that Stems Cache uses:**
   `C:\ProgramData\rbstemsplus\ort\onnxruntime.dll`. Only administrators can change it. Stems

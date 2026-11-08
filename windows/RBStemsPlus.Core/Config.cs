@@ -14,7 +14,7 @@ using System.Text;
 
 namespace RBStemsPlus;
 
-public sealed record Config(bool Enabled = true, bool RekordboxModel = false, double MaxGB = 20, double MaxDays = 60);
+public sealed record Config(bool Enabled = true, bool RekordboxModel = false, bool Gpu = true, double MaxGB = 20, double MaxDays = 60);
 
 /// Where config.ini says the stems are saved.
 public abstract record ConfigLocation
@@ -178,16 +178,17 @@ public static class ConfigFile
             {
                 if (key == "cache_dir") dirs.Add(null);
                 else if (key == "cache_id") ids.Add(null);
-                else if (key is "enabled" or "rekordbox_model" or "max_gb" or "max_days") log($"config.ini: ignored {key} (a line over {LineMax} bytes)");
+                else if (key is "enabled" or "rekordbox_model" or "gpu" or "max_gb" or "max_days") log($"config.ini: ignored {key} (a line over {LineMax} bytes)");
                 continue;
             }
             switch (key)
             {
                 case "enabled":
                 case "rekordbox_model":
+                case "gpu":
                     bool? on = value.ToLowerInvariant() switch { "1" or "yes" or "on" or "true" => true, "0" or "no" or "off" or "false" => false, _ => null };
                     if (on == null) { log($"config.ini: ignored {key}={value} (allowed 1 or 0)"); break; }
-                    cfg = key == "enabled" ? cfg with { Enabled = on.Value } : cfg with { RekordboxModel = on.Value };
+                    cfg = key switch { "enabled" => cfg with { Enabled = on.Value }, "gpu" => cfg with { Gpu = on.Value }, _ => cfg with { RekordboxModel = on.Value } };
                     break;
                 case "max_gb":
                 case "max_days":
@@ -253,6 +254,8 @@ public static class ConfigFile
 
     public static bool WriteLimits(string file, double maxGB, double maxDays) =>
         WriteValues(file, new() { ("max_gb", Number(maxGB)), ("max_days", Number(maxDays)) });
+
+    public static bool WriteGpu(string file, bool on) => WriteValues(file, new() { ("gpu", on ? "1" : "0") });
 
     public static bool WriteRekordboxModel(string file, bool on) => WriteValues(file, new() { ("rekordbox_model", on ? "1" : "0") });
 

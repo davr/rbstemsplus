@@ -21,14 +21,11 @@
     - under wine with Pioneer's DirectML DLL (that run was stopped by the user);
     - on a real GPU (only the user's PC can do that).
   - **Still to do:**
-    1. The app side:
-       - add `Gpu` to `Config` in `windows/RBStemsPlus.Core/Config.cs` (parse `gpu` like `enabled`, default true);
-       - add a Settings checkbox "Use the GPU for separation (DirectML)" that writes `gpu=1|0` with `ConfigFile.WriteValues`;
-       - show `gpu=` in `Probe.Text`.
-    2. A test: the bridge's unit/config output, or a fixture with `gpu=0`; check that "on the CPU (gpu=0 in config.ini)" is logged.
-    3. Run the suite with Pioneer's DLL (`RBSTEMS_WIN_ORT=<folder with Pioneer's onnxruntime.dll and DirectML.dll>`), expecting the fallback under wine.
-    4. Update `docs/windows.md` (GPU section) and GPU.md.
-    5. Publish `windows-test-5`. The user then updates Stems Cache with the button, loads a new track, and sends `bridge.log`, which shows the GPU line and "the model took … s" per chunk.
+    1. ~~The app side~~ done: `Config.Gpu` (default true), `ConfigFile.WriteGpu`, a Settings checkbox, `gpu=` in the probe text, a Core test (111 pass).
+    2. Still open: a bridge test for `gpu=0` ("on the CPU (gpu=0 in config.ini)").
+    3. Still open: run the suite with Pioneer's DLL (`RBSTEMS_WIN_ORT=<folder with Pioneer's onnxruntime.dll and DirectML.dll>`), expecting the fallback under wine.
+    4. Docs: GPU.md and `docs/windows.md` mention `gpu=`.
+    5. `windows-test-5` is published by the tag file. The user then updates Stems Cache with the button, loads a new track, and sends `bridge.log`, which shows the GPU line and "the model took … s" per chunk.
     6. If DirectML is slow or refuses our model, that is case B in GPU.md: a benchmark tool and a DirectML-friendly export.
 
 This is the working list for the Windows port. The approved design is in [PLAN.md](PLAN.md), and the facts learned along the way are in [NOTES.md](NOTES.md). The list is updated as work moves forward.

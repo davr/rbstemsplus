@@ -102,6 +102,20 @@ public class ConfigTests
     }
 
     [Fact]
+    public void GpuIsOnByDefaultAndWritable()
+    {
+        var file = Path.Combine(Directory.CreateTempSubdirectory().FullName, "config.ini");
+        Assert.True(ConfigFile.Read(file).Config.Gpu);
+        File.WriteAllText(file, "max_gb=3\n");
+        Assert.True(ConfigFile.Read(file).Config.Gpu);
+        Assert.True(ConfigFile.WriteGpu(file, false));
+        Assert.False(ConfigFile.Read(file).Config.Gpu);
+        Assert.Contains("gpu=0\n", File.ReadAllText(file));
+        Assert.True(ConfigFile.WriteGpu(file, true));
+        Assert.True(ConfigFile.Read(file).Config.Gpu);
+    }
+
+    [Fact]
     public void NeverWritesOverAnUnreadableFile()
     {
         var file = Path.Combine(Directory.CreateTempSubdirectory().FullName, "config.ini");

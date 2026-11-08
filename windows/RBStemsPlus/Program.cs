@@ -67,7 +67,7 @@ static class Probe
         sb.AppendLine($"STEMS Engine: {(Rekordbox.EngineVersion(p.ModelDir) is { Length: > 0 } e ? e : "not downloaded")}; model {(File.Exists(model) ? $"{Files.Size(model)} bytes, sha256 {Files.Sha256(model)?[..12]}" : "missing")}");
         sb.AppendLine($"Pioneer's library copy: {(File.Exists(p.RootOrt) ? $"present ({Rekordbox.OrtVersion(p.RootOrt)})" : "none")}");
         var cfg = ConfigFile.Read(p.ConfigFile);
-        sb.AppendLine($"config.ini: enabled={(cfg.Config.Enabled ? 1 : 0)} max_gb={ConfigFile.Number(cfg.Config.MaxGB)} max_days={ConfigFile.Number(cfg.Config.MaxDays)} rekordbox_model={(cfg.Config.RekordboxModel ? 1 : 0)} location={cfg.Location switch { ConfigLocation.Chosen c => c.Dir, ConfigLocation.Malformed mm => "WRONG: " + mm.Why, _ => "this PC" }}{(cfg.Unreadable != null ? " UNREADABLE: " + cfg.Unreadable : "")}");
+        sb.AppendLine($"config.ini: enabled={(cfg.Config.Enabled ? 1 : 0)} max_gb={ConfigFile.Number(cfg.Config.MaxGB)} max_days={ConfigFile.Number(cfg.Config.MaxDays)} rekordbox_model={(cfg.Config.RekordboxModel ? 1 : 0)} gpu={(cfg.Config.Gpu ? 1 : 0)} location={cfg.Location switch { ConfigLocation.Chosen c => c.Dir, ConfigLocation.Malformed mm => "WRONG: " + mm.Why, _ => "this PC" }}{(cfg.Unreadable != null ? " UNREADABLE: " + cfg.Unreadable : "")}");
         var ch = State.ReadChosen(p);
         sb.AppendLine($"installed (chosen): model={(ch.Model ? 1 : 0)} cache={(ch.Cache ? 1 : 0)}; watcher {(WatcherRegistration.Registered() ? (WatcherRegistration.Disabled() ? "registered, turned OFF in Startup apps" : "registered") : "not registered")}");
         return sb.ToString();
