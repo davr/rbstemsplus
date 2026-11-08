@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- RB Stems Plus for Windows: the logic (no UI). net8.0 so that its tests run on any OS; the
+       Windows-only calls (registry, ACLs, Authenticode, drives) are behind OperatingSystem checks. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>RBStemsPlus</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <NoWarn>CA1416</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="RBStemsPlus.Tests" />
+  </ItemGroup>
+  <!-- The public keys a payload-windows.json may be signed with: the release and backup keys,
+       or, in a test build (RbspTestKey=PATH, scripts/build-windows.sh test mode), only that key. -->
+  <ItemGroup Condition="'$(RbspTestKey)' == ''">
+    <EmbeddedResource Include="..\..\keys\release.pub.pem" LogicalName="keys.release.pub.pem" />
+    <EmbeddedResource Include="..\..\keys\backup.pub.pem" LogicalName="keys.backup.pub.pem" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(RbspTestKey)' != ''">
+    <EmbeddedResource Include="$(RbspTestKey)" LogicalName="keys.test.pub.pem" />
+  </ItemGroup>
+  <PropertyGroup Condition="'$(RbspTestBase)' != ''">
+    <DefineConstants>$(DefineConstants);RBSTEMSPLUS_TEST_BUILD</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(RbspTestBase)' != ''">
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>RbspTestBase</_Parameter1>
+      <_Parameter2>$(RbspTestBase)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+</Project>

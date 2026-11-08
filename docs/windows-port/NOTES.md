@@ -124,3 +124,13 @@ Shared contracts the Windows side must keep:
 - objdump prints the name table as `[   n] Name`, where n is ordinal minus base. Under awk, "[" and "n]" are separate fields.
 - The free-space floor is min(10% of the disk, 50 GB). A test that wants to be "under the floor" with a 1000 GB disk needs less than 50 GB free.
 - The suite takes about 1 minute under wine.
+
+## Windows app core: design notes
+- **Signing keys:** `keys/release.pub.pem` and `keys/backup.pub.pem` are **embedded resources** of RBStemsPlus.Core (`CompiledKeys.cs` reads them), so there is no generated Keys file. A test build passes `-p:RbspTestKey=<pem>` (only that key is embedded) and `-p:RbspTestBase=<url>`, which defines `RBSTEMSPLUS_TEST_BUILD` and an AssemblyMetadata attribute that `Consts.DownloadBase` reads.
+- **Releases:** the Windows release has its own `payload-windows.json` plus `.sig`, with the same schema as `payload.json`. `bridge.file` is `onnxruntime.dll` and `app.zip` is `rbstemsplus-windows.zip`. The model asset is shared with macOS. The built-in compat list is rekordbox 7.2.14, ORT `1.18.`, engine 0002.
+- **Downloads:** HttpClient with a redirect handler that refuses non-HTTPS (the counterpart of `curl --proto-redir =https`), resuming with Range.
+- **Elevated operations:** the app re-runs itself with `--elevated install-cache <dir> <version> <bridge> <sha>` or `--elevated uninstall-cache [dirs]` through UAC. They are serialized by the `Global\io.github.rbstemsplus.admin` mutex. Exit codes are `AdminExit`.
+- **ACLs:** `Elevated.SecureRoot` makes `%ProgramData%\rbstemsplus` protected (not inheriting): Administrators and SYSTEM get full control, Users read and execute, the owner is Administrators. Children inherit.
+- **Model swap:** the same decisions as `Models.swift` (save Pioneer's with its `.engine`, `mayBePioneers`, check again before the replace), using `File.Move(overwrite)`, which is MoveFileEx(REPLACE_EXISTING) on Windows.
+- **bridge-state start times:** the bridge writes the process creation time as whole seconds; .NET's `Process.StartTime` may round differently, so a difference of up to 1 second is accepted.
+- **Small divergence:** `ConfigFile.ParseNumber` uses .NET invariant parsing. Unlike strtod, it doesn't take hex floats (`0x1p1`) or `inf`. Out-of-range values are refused anyway, and no fixture uses hex.

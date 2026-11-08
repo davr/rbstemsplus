@@ -3,3 +3,5 @@ build/
 dist/
 dist-test/
 *.onnx
+windows/*/bin/
+windows/*/obj/
