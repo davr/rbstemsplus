@@ -78,6 +78,42 @@ else
   trusted="$(pubkey_b64 "$root/keys/release.pub.pem") $(pubkey_b64 "$root/keys/backup.pub.pem")" || die "keys/*.pub.pem aren't P-256 keys"
 fi
 
+echo "== the model"
+if [ -f "$dist/$model" ] && [ "$(size "$dist/$model")" = "$model_size" ] && [ "$(sha256 "$dist/$model")" = "$model_sha256" ]; then
+  echo "dist/$model is already there"
+elif [ -n "${RBSTEMSPLUS_MODEL:-}" ] && [ -f "$RBSTEMSPLUS_MODEL" ]; then
+  [ "$(sha256 "$RBSTEMSPLUS_MODEL")" = "$model_sha256" ] || die "$RBSTEMSPLUS_MODEL doesn't have SHA-256 $model_sha256"
+  cp "$RBSTEMSPLUS_MODEL" "$dist/$model.part" && mv "$dist/$model.part" "$dist/$model"
+else
+  # the same file the macOS release publishes: downloaded once, checked against its SHA-256 and size
+  url="${RBSTEMSPLUS_MODEL_URL:-https://github.com/Gabe-LS/rbstemsplus/releases/latest/download/$model}"
+  echo "downloading the model from $url"
+  ok=
+  for attempt in 1 2 3 4 5 6; do                       # resumed after a dropped connection
+    if curl -fsSL --proto =https --proto-redir =https -C - -o "$dist/$model.part" "$url"; then ok=1; break; fi
+    echo "  (interrupted: resuming, attempt $((attempt + 1)))"; sleep $((attempt * 2))
+  done
+  [ -n "$ok" ] || die "couldn't download the model: put it at dist/$model or set RBSTEMSPLUS_MODEL"
+  [ "$(size "$dist/$model.part")" = "$model_size" ] && [ "$(sha256 "$dist/$model.part")" = "$model_sha256" ] \
+    || { rm -f "$dist/$model.part"; die "the downloaded model isn't SHA-256 $model_sha256"; }
+  mv "$dist/$model.part" "$dist/$model"
+fi
+
+echo "== the DirectML model (experimental: a fixed-shape copy, scripts/dml-model)"
+dml_model="stemsplus-model-dml.onnx"
+python3 -I -c "import onnx, onnxsim, onnxruntime, numpy" 2> /dev/null || die "the DirectML model needs: pip install onnx onnxsim onnxruntime numpy"
+python3 -I "$root/scripts/dml-model/make_dml_model.py" "$dist/$model" "$dist/$dml_model.part" --check > "$root/build/dml-model.log" 2>&1 \
+  || { tail -20 "$root/build/dml-model.log"; die "the DirectML model wasn't made"; }
+grep -q "^x max |new| 0.0 " "$root/build/dml-model.log" || die "the DirectML model's x isn't all zero"
+python3 -I - "$root/build/dml-model.log" <<'EOF' || die "the DirectML model differs from the model"
+import re, sys
+m = re.search(r"xt max abs diff ([0-9.e+-]+)", open(sys.argv[1]).read())
+sys.exit(0 if m and float(m.group(1)) < 1e-4 else 1)
+EOF
+mv "$dist/$dml_model.part" "$dist/$dml_model"
+export RBSTEMS_DML_SHA="$(sha256 "$dist/$dml_model")"
+tail -n +1 "$root/build/dml-model.log" | grep -E "^nodes|^xt|^x max"
+
 echo "== the bridge"
 "$root/bridge/win/build.sh" "$root/build/bridge-win" > "$root/build/bridge-win.log" 2>&1 || { tail -20 "$root/build/bridge-win.log"; die "the bridge didn't build"; }
 cp "$root/build/bridge-win/$bridge" "$dist/$bridge"
@@ -104,27 +140,6 @@ with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr(info, open(path, "rb").read())
 EOF
 
-echo "== the model"
-if [ -f "$dist/$model" ] && [ "$(size "$dist/$model")" = "$model_size" ] && [ "$(sha256 "$dist/$model")" = "$model_sha256" ]; then
-  echo "dist/$model is already there"
-elif [ -n "${RBSTEMSPLUS_MODEL:-}" ] && [ -f "$RBSTEMSPLUS_MODEL" ]; then
-  [ "$(sha256 "$RBSTEMSPLUS_MODEL")" = "$model_sha256" ] || die "$RBSTEMSPLUS_MODEL doesn't have SHA-256 $model_sha256"
-  cp "$RBSTEMSPLUS_MODEL" "$dist/$model.part" && mv "$dist/$model.part" "$dist/$model"
-else
-  # the same file the macOS release publishes: downloaded once, checked against its SHA-256 and size
-  url="${RBSTEMSPLUS_MODEL_URL:-https://github.com/Gabe-LS/rbstemsplus/releases/latest/download/$model}"
-  echo "downloading the model from $url"
-  ok=
-  for attempt in 1 2 3 4 5 6; do                       # resumed after a dropped connection
-    if curl -fsSL --proto =https --proto-redir =https -C - -o "$dist/$model.part" "$url"; then ok=1; break; fi
-    echo "  (interrupted: resuming, attempt $((attempt + 1)))"; sleep $((attempt * 2))
-  done
-  [ -n "$ok" ] || die "couldn't download the model: put it at dist/$model or set RBSTEMSPLUS_MODEL"
-  [ "$(size "$dist/$model.part")" = "$model_size" ] && [ "$(sha256 "$dist/$model.part")" = "$model_sha256" ] \
-    || { rm -f "$dist/$model.part"; die "the downloaded model isn't SHA-256 $model_sha256"; }
-  mv "$dist/$model.part" "$dist/$model"
-fi
-
 echo "== bootstrap.ps1"
 [ "$(grep -c '^\$SigningKeys = ""$' "$root/scripts/bootstrap.ps1")" = 1 ] || die "scripts/bootstrap.ps1 needs exactly one \$SigningKeys = \"\" line"
 [ "$(grep -c '^\$PayloadMinimum = ""$' "$root/scripts/bootstrap.ps1")" = 1 ] || die "scripts/bootstrap.ps1 needs exactly one \$PayloadMinimum = \"\" line"
@@ -143,6 +158,7 @@ cat > "$dist/payload-windows.json" <<EOF
   "app": {"version": "$version", "zip": "$app_zip", "sha256": "$(sha256 "$dist/$app_zip")"},
   "bridge": {"file": "$bridge", "sha256": "$(sha256 "$dist/$bridge")"},
   "model": {"file": "$model", "sha256": "$model_sha256", "size": $model_size},
+  "model_dml": {"file": "$dml_model", "sha256": "$RBSTEMS_DML_SHA", "size": $(size "$dist/$dml_model")},
   "previous_models": $(json_list "$previous_models"),
   "compatible": {
     "rekordbox": $(json_list "$compat_rekordbox"),
@@ -154,7 +170,7 @@ EOF
 python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$dist/payload-windows.json" || die "payload-windows.json isn't valid JSON"
 
 echo "== SHA256SUMS-windows"
-(cd "$dist" && for f in "$app_zip" "$bridge" "$model" bootstrap.ps1 payload-windows.json; do echo "$(sha256 "$f")  $f"; done > SHA256SUMS-windows)
+(cd "$dist" && for f in "$app_zip" "$bridge" "$model" "$dml_model" bootstrap.ps1 payload-windows.json; do echo "$(sha256 "$f")  $f"; done > SHA256SUMS-windows)
 cat "$dist/SHA256SUMS-windows"
 
 rm -f "$dist/payload-windows.json.sig"

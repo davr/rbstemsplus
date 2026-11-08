@@ -2377,6 +2377,37 @@ static int is_ours(const char *fp) {
     return 0;
 }
 
+/* The fixed-shape copy of our model for DirectML (hdemucs-dml.onnx beside hdemucs.onnx; experimental,
+ * scripts/dml-model): the same network with every shape a constant, so DirectML can run the whole
+ * graph instead of splitting it. Used only for our model, with gpu=1, when its SHA-256 is the one
+ * compiled in (RBSTEMS_DML_SHA, from the build). It accepts 485,100-sample chunks only, which is
+ * all rekordbox sends; if it can't be opened the dynamic model is used. */
+#ifndef RBSTEMS_DML_SHA
+#define RBSTEMS_DML_SHA ""
+#endif
+static int is_dml_model(const char *fp) {
+    if (RBSTEMS_DML_SHA[0] && !strcmp(fp, RBSTEMS_DML_SHA)) return 1;
+#ifdef RBSTEMS_TEST_REAL_PATH
+    const char *t = getenv("RBSTEMS_TEST_DML_MODEL");
+    if (t && !strcmp(fp, t)) return 1;
+#endif
+    return 0;
+}
+
+/* the path of hdemucs-dml.onnx beside `path` (which ends in hdemucs.onnx), if it is there and is
+ * the compiled-in file; "" otherwise */
+static void fixed_model_path(const ORTCHAR_T *path, ORTCHAR_T *out, size_t n) {
+    out[0] = 0;
+    size_t len = wcslen(path);
+    static const wchar_t dml[] = L"hdemucs-dml.onnx";
+    if (len < 13 || len - 12 + wcslen(dml) + 1 > n) return;
+    wmemcpy(out, path, len - 12);
+    wcscpy(out + len - 12, dml);
+    char u[RB_PATH_MAX], fp[65];
+    if (rb_utf8(out, -1, u, sizeof u) || file_sha256(u, fp)) { out[0] = 0; return; }   /* not there */
+    if (!is_dml_model(fp)) { logf_("GPU: hdemucs-dml.onnx isn't the expected file (SHA-256 %.12s): not used", fp); out[0] = 0; }
+}
+
 /* ---------------------------------------------------------------- the GPU (DirectML) */
 
 /* rekordbox for Windows runs its Demucs sessions on the CPU: it adds no execution provider (its
@@ -2461,6 +2492,9 @@ static OrtStatus *create_demucs(const OrtEnv *env, const ORTCHAR_T *path, const 
     *gpu = 0;
     int ours = is_ours(fp);
     if (!options || (!ours && !gpu_on)) return R->CreateSession(env, path, options, out);
+    ORTCHAR_T fixed[RB_PATH_MAX];
+    fixed[0] = 0;
+    if (ours && gpu_on) fixed_model_path(path, fixed, RB_PATH_MAX);
     for (int attempt = gpu_on ? 0 : 1; attempt < 2; attempt++) {
         OrtSessionOptions *o = NULL;
         const char *dml_what = "";
@@ -2480,11 +2514,12 @@ static OrtStatus *create_demucs(const OrtEnv *env, const ORTCHAR_T *path, const 
                 continue;                                   /* ours: memory pattern off, on the CPU */
             }
         }
-        if (!st) st = R->CreateSession(env, path, o, out);  /* the session keeps its own copy of o */
+        const ORTCHAR_T *use = with_dml && fixed[0] ? fixed : path;
+        if (!st) st = R->CreateSession(env, use, o, out);   /* the session keeps its own copy of o */
         if (o) R->ReleaseSessionOptions(o);
         if (!st) {
-            snprintf(howbuf, sizeof howbuf, "%s%s%s", ours ? "memory pattern off" : "rekordbox's session options",
-                     with_dml ? ", " : "", with_dml ? dml_what : "");
+            snprintf(howbuf, sizeof howbuf, "%s%s%s%s", ours ? "memory pattern off" : "rekordbox's session options",
+                     with_dml ? ", " : "", with_dml ? dml_what : "", use == fixed ? ", fixed-shape model hdemucs-dml.onnx" : "");
             *how = howbuf;
             *gpu = with_dml;
             return NULL;
@@ -2492,6 +2527,7 @@ static OrtStatus *create_demucs(const OrtEnv *env, const ORTCHAR_T *path, const 
         logf_("model %.12s: %s failed (%s)%s", fp, with_dml ? "the GPU session" : "memory pattern off", R->GetErrorMessage(st),
               with_dml ? ": trying the CPU" : ", opening it with rekordbox's session options");
         R->ReleaseStatus(st);
+        if (use == fixed) { fixed[0] = 0; attempt = -1; continue; }   /* the fixed-shape model failed: the dynamic one, on the GPU */
         if (!with_dml && attempt == 1) break;
         if (with_dml && !ours) return R->CreateSession(env, path, options, out);
     }

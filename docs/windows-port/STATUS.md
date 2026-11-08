@@ -1,5 +1,7 @@
 # Windows port: status
 
+> **Branch `claude/dml-model`** (off `claude/affectionate-ride-f082bb` at 70e3774): case B, the fixed-shape DirectML model. Built and tested here (bridge suite 120, Core tests 112); the CI build and `windows-test-6dml` are the next check, then the user's `bridge.log`. See GPU.md.
+
 > **Current state (2026-11-08, paused at the user's request).** Read "Where things stand" first.
 
 ## Where things stand

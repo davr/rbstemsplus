@@ -87,6 +87,12 @@ public sealed class Engine
             Step("Downloading the Demucs v4 model (about 300 MB)");
             var r = Payload.Asset(p, m.Model.File, m.ModelPath(p), m.Model.Sha256, m.Model.Size, "the Demucs v4 model", status, log.Write, progress: progress);
             if (r != Payload.Fetched.Ok) { TellFetch(r); return false; }
+            if (m.ModelDml is { } d)    // experimental: a failed download only means the dynamic model is used
+            {
+                status("Downloading the DirectML model (about 350 MB)…");
+                var rd = Payload.Asset(p, d.File, m.ModelDmlPath(p), d.Sha256, d.Size, "the DirectML model", status, log.Write, progress: progress);
+                if (rd != Payload.Fetched.Ok) log.Write("DirectML model: not downloaded: Demucs v4 uses its normal model");
+            }
         }
         if (bridge)
         {
@@ -130,6 +136,7 @@ public sealed class Engine
         if (!r.Ok) { ask.Tell("Demucs v4 wasn't installed", $"Demucs v4 couldn't be installed. {r.Message} Nothing was changed."); return false; }
         var c = State.ReadChosen(p);
         State.SetChosen(p, true, c.Cache);
+        if (m.ModelDml is { } dm && Files.Verified(m.ModelDmlPath(p), dm.Sha256, dm.Size)) ModelsFor(m).InstallDml(m.ModelDmlPath(p), dm.Sha256);
         log.Write("Demucs v4: on");
         return true;
     }

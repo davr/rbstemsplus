@@ -5,9 +5,9 @@ name: windows
 
 on:
   push:
-    paths: ["bridge/win/**", "windows/**", "scripts/build-windows.sh", "scripts/bootstrap.ps1", "tests/**", ".github/workflows/windows.yml"]
+    paths: ["bridge/win/**", "windows/**", "scripts/build-windows.sh", "scripts/dml-model/**", "scripts/bootstrap.ps1", "tests/**", ".github/workflows/windows.yml"]
   pull_request:
-    paths: ["bridge/win/**", "windows/**", "scripts/build-windows.sh", "scripts/bootstrap.ps1", "tests/**", ".github/workflows/windows.yml"]
+    paths: ["bridge/win/**", "windows/**", "scripts/build-windows.sh", "scripts/dml-model/**", "scripts/bootstrap.ps1", "tests/**", ".github/workflows/windows.yml"]
   workflow_dispatch:
 
 permissions:
@@ -29,6 +29,8 @@ jobs:
         run: RBSTEMS_NO_SKIP= bridge/win/tests/run.sh
       - name: "the app's tests"
         run: dotnet test windows/RBStemsPlus.Tests
+      - name: "python tools for the DirectML model"
+        run: pip install --quiet onnx onnxsim onnxruntime numpy
       - name: "a test build"
         run: |
           git config user.email ci@example.invalid && git config user.name ci

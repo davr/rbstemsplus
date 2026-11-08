@@ -83,3 +83,9 @@ Compare our model with rekordbox's own. With `rekordbox_model=1` the bridge time
 ## What would help from the user
 - Run `windows-test-3`. Load a track you haven't loaded yet, wait a few chunks, and send `bridge.log`. The lines to look for are "asked for the … execution provider" and "Demucs session opened … on the GPU/CPU".
 - Your GPU model, and whether rekordbox's own model is faster than ours on this PC.
+
+## Case B, built on branch `claude/dml-model` (2026-11-08)
+- The model has 9,800 nodes, 555 of them `Shape`, with dynamic shapes: DirectML can't plan it and ONNX Runtime keeps the shape work on the CPU.
+- `scripts/dml-model/make_dml_model.py` fixes the shapes (485,100 samples, 474 frames) and folds them away: 3,368 nodes, no `Shape`; same output (xt within 3e-6, x zero). See `scripts/dml-model/README.md`.
+- The bridge uses `hdemucs-dml.onnx` (verified by a compiled-in SHA-256) with `gpu=1`; the app installs it with Demucs v4. Not yet measured on a GPU: the first real numbers come from `windows-test-6dml`'s `bridge.log` (the `Demucs session opened` line ends with `fixed-shape model hdemucs-dml.onnx`).
+- To drop it: delete the branch. To keep it: merge `claude/dml-model` into `claude/affectionate-ride-f082bb`.

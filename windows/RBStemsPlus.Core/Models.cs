@@ -34,6 +34,31 @@ public sealed class Models
     }
 
     public string Model => Path.Combine(Dir, "hdemucs.onnx");
+    /// The fixed-shape DirectML copy (experimental) the bridge prefers beside hdemucs.onnx.
+    public string ModelDml => Path.Combine(Dir, "hdemucs-dml.onnx");
+
+    /// Copies the checked DirectML model beside the model (a temp file, checked, then renamed over). Best effort:
+    /// without it the bridge uses the dynamic model.
+    public bool InstallDml(string source, string sha)
+    {
+        try
+        {
+            if (Files.IsReparsePoint(ModelDml)) { Log("DirectML model: hdemucs-dml.onnx isn't a file: left as it is"); return false; }
+            if (File.Exists(ModelDml) && Files.Sha256(ModelDml) == sha) { Log("DirectML model: already in place"); return true; }
+            var tmp = Path.Combine(Dir, ".hdemucs-dml.new");
+            Files.Remove(tmp);
+            Status("Installing the DirectML model…");
+            var err = Files.Copy(source, tmp, pct => Progress(pct));
+            Progress(null);
+            if (err != null || Files.Sha256(tmp) != sha) { Files.Remove(tmp); Log($"DirectML model: not installed ({err ?? "the copy didn't match"})"); return false; }
+            File.Move(tmp, ModelDml, overwrite: true);
+            Log($"DirectML model: installed ({sha[..12]})");
+            return true;
+        }
+        catch (Exception e) { Log("DirectML model: not installed (" + e.Message + ")"); return false; }
+    }
+
+    void RemoveDml() { try { if (File.Exists(ModelDml) && !Files.IsReparsePoint(ModelDml)) File.Delete(ModelDml); } catch { } }
     string NewTemp => Path.Combine(Dir, ".hdemucs.new");
     string RestoreTemp => Path.Combine(Dir, ".hdemucs.restore");
     public string Saved(string sha) => Path.Combine(Originals, sha + ".onnx");
@@ -126,6 +151,7 @@ public sealed class Models
     public Outcome Restore()
     {
         if (!Directory.Exists(Dir)) return Done("rekordbox's model folder isn't there: nothing to put back.");
+        RemoveDml();
         bool present = File.Exists(Model);
         var live = present ? Files.Sha256(Model) : null;
         if (present && live == null) return Fail("rekordbox's stems model can't be read.");

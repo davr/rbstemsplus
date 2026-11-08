@@ -62,6 +62,8 @@ public sealed class Manifest
     public App AppInfo = new("", "", "");
     public FileRef Bridge = new("", "", null);
     public FileRef Model = new("", "", null);
+    /// The fixed-shape DirectML copy of the model (experimental); null when the payload has none.
+    public FileRef? ModelDml;
     public Compatible Compat = new(new(), "", new());
     public List<string>? PreviousModels;
     /// The compiled-in key that signed it; set only by Payload.Check.
@@ -69,6 +71,7 @@ public sealed class Manifest
 
     public string Dir(AppPaths p) => Path.Combine(p.PayloadRoot, PayloadVersion);
     public string ModelPath(AppPaths p) => Path.Combine(Dir(p), "model.onnx");
+    public string ModelDmlPath(AppPaths p) => Path.Combine(Dir(p), "model-dml.onnx");
     public string BridgePath(AppPaths p) => Path.Combine(Dir(p), "onnxruntime.dll");
 
     static bool Plain(string s) => s.Length > 0 && s != "." && s != ".." && s.All(c => c < 128 && (char.IsLetterOrDigit(c) || "._-".Contains(c)));
@@ -76,7 +79,8 @@ public sealed class Manifest
     public bool Valid =>
         new[] { PayloadVersion, AppInfo.Version, AppInfo.Zip, Bridge.File, Model.File }.All(Plain)
         && new[] { AppInfo.Sha256, Bridge.Sha256, Model.Sha256 }.Concat(PreviousModels ?? new()).All(Files.IsSha256)
-        && (Model.Size ?? 0) > 0;
+        && (Model.Size ?? 0) > 0
+        && (ModelDml == null || (Plain(ModelDml.File) && Files.IsSha256(ModelDml.Sha256) && (ModelDml.Size ?? 0) > 0));
 
     /// Parses the JSON (keys must pass PlainJsonKeys first); unknown keys are ignored.
     public static Manifest? Decode(byte[] data)
@@ -96,6 +100,7 @@ public sealed class Manifest
                 AppInfo = new App(S(a, "version"), S(a, "zip"), S(a, "sha256")),
                 Bridge = F(r.GetProperty("bridge")),
                 Model = F(r.GetProperty("model")),
+                ModelDml = r.TryGetProperty("model_dml", out var md) && md.ValueKind == JsonValueKind.Object ? F(md) : null,
                 Compat = new Compatible(L(c, "rekordbox"), S(c, "ort_version_prefix"), L(c, "stems_engine")),
                 PreviousModels = r.TryGetProperty("previous_models", out var pm) ? pm.EnumerateArray().Select(x => x.GetString() ?? "").ToList() : null,
             };

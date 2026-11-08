@@ -40,6 +40,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq mingw-w64 xz-utils > /dev/null
+      - name: "python tools for the DirectML model"
+        run: pip install --quiet onnx onnxsim onnxruntime numpy
       - uses: actions/setup-dotnet@v4
         with: { dotnet-version: "8.0.x" }
       - name: "the tag is new"
@@ -67,6 +69,6 @@ jobs:
           EOF
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
             --title "RB Stems Plus for Windows (TEST, $TAG)" --notes-file notes.md \
-            rbstemsplus-windows.zip onnxruntime.dll stemsplus-model.onnx bootstrap.ps1 \
+            rbstemsplus-windows.zip onnxruntime.dll stemsplus-model.onnx stemsplus-model-dml.onnx bootstrap.ps1 \
             payload-windows.json payload-windows.json.sig SHA256SUMS-windows
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name'

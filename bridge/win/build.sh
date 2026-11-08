@@ -84,6 +84,7 @@ cp "$src/flac-$FLAC_VERSION/src/libFLAC/.libs/libFLAC.a" "$prefix/lib/libFLAC.a"
 # ---------------------------------------------------------------- the bridge
 
 defines="-DFLAC__NO_DLL"
+[[ "${RBSTEMS_DML_SHA:-}" =~ ^[0-9a-f]{64}$ ]] && defines="$defines -DRBSTEMS_DML_SHA=\"$RBSTEMS_DML_SHA\""
 note="release"
 if [ -n "$test_path" ]; then
   # the C string literal of the path: backslashes doubled

@@ -176,6 +176,17 @@ public class PayloadTests
     }
 
     [Fact]
+    public void ModelDmlIsOptionalAndChecked()
+    {
+        Assert.Null(Manifest.Decode(Json())!.ModelDml);
+        string Dml(string sha, long size) => "\"model_dml\":{\"file\":\"stemsplus-model-dml.onnx\",\"sha256\":\"" + sha + "\",\"size\":" + size + "},";
+        var ok = Manifest.Decode(Json(extra: Dml(new string('d', 64), 349039362)))!;
+        Assert.Equal(new string('d', 64), ok.ModelDml!.Sha256);
+        Assert.Null(Manifest.Decode(Json(extra: Dml("nothex", 5))));
+        Assert.Null(Manifest.Decode(Json(extra: Dml(new string('d', 64), 0))));
+    }
+
+    [Fact]
     public void RefusesUnsignedForgedOlderAndDuplicateKeys()
     {
         var (k, t) = NewKey("test");

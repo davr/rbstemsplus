@@ -78,7 +78,7 @@ sha() { python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb
 # ---------------------------------------------------------------- helpers
 
 point() { rm -f "$real_dir"/*.dll; [ -z "$1" ] || cp "$1"/*.dll "$real_dir/" 2>/dev/null || cp "$1" "$real_dir/onnxruntime.dll"; }
-fresh() { h="$scratch/home-$1"; rm -rf "$h"; mkdir -p "$h"; free=1000; disk=1000; pioneer=; near=1; anyvol=; hcache=; }
+fresh() { h="$scratch/home-$1"; rm -rf "$h"; mkdir -p "$h"; free=1000; disk=1000; pioneer=; near=1; anyvol=; hcache=; dmlsha=; }
 logf() { echo "$h/AppData/Local/rbstemsplus/Logs/bridge.log"; }
 statef() { echo "$h/AppData/Local/rbstemsplus/Logs/bridge-state"; }
 cachef() { echo "$h/AppData/Local/rbstemsplus/Cache"; }
@@ -86,12 +86,13 @@ has() { grep -qF -- "$1" "$(logf)" 2>/dev/null; }
 count() { grep -cF -- "$1" "$(logf)" 2>/dev/null || true; }
 config() { mkdir -p "$h/AppData/Roaming/rbstemsplus"; printf "$1" > "$h/AppData/Roaming/rbstemsplus/config.ini"; }
 run_exe() {                                              # runs an exe from $app with the test environment
-  local e=(env -u RBSTEMS_TEST_FREE_GB -u RBSTEMS_TEST_DISK_GB -u RBSTEMS_TEST_OUR_MODEL -u RBSTEMS_TEST_PIONEER_MODEL
+  local e=(env -u RBSTEMS_TEST_FREE_GB -u RBSTEMS_TEST_DISK_GB -u RBSTEMS_TEST_OUR_MODEL -u RBSTEMS_TEST_DML_MODEL -u RBSTEMS_TEST_PIONEER_MODEL
            -u RBSTEMS_TEST_NEAR_HITS -u RBSTEMS_TEST_ANY_VOLUME -u RBSTEMS_HARNESS_CACHE RBSTEMS_TEST_HOME="$(winpath "$h")")
   [ -n "$near" ] && e+=(RBSTEMS_TEST_NEAR_HITS="$near")
   [ -n "$free" ] && e+=(RBSTEMS_TEST_FREE_GB="$free")
   [ -n "$disk" ] && e+=(RBSTEMS_TEST_DISK_GB="$disk")
   [ -n "$ours" ] && e+=(RBSTEMS_TEST_OUR_MODEL="$ours")
+  [ -n "$dmlsha" ] && e+=(RBSTEMS_TEST_DML_MODEL="$dmlsha")
   [ -n "$pioneer" ] && e+=(RBSTEMS_TEST_PIONEER_MODEL="$pioneer")
   [ -n "$anyvol" ] && e+=(RBSTEMS_TEST_ANY_VOLUME=1)
   [ -n "$hcache" ] && e+=(RBSTEMS_HARNESS_CACHE="$(winpath "$hcache")")
@@ -156,6 +157,16 @@ else
 
   # ---------------------------------------------------------------- exact and near hits
   if [ -z "$have_model" ]; then skip "the model tests (need python3)"; else
+    # the fixed-shape DirectML model (hdemucs-dml.onnx beside the model): used only when it is the expected file
+    if [ -f "$scratch/pmodel/good/hdemucs.onnx" ]; then
+      fresh dmlfile; near=; cp "$scratch/pmodel/good/hdemucs.onnx" "$scratch/model/hdemucs-dml.onnx"
+      out="$(outcome a wait a)"
+      expect '[ "$out" = "a model stored 1 a cache " ] && has "hdemucs-dml.onnx isn'"'"'t the expected file"' "an unexpected hdemucs-dml.onnx: not used, logged: got \"$out\""
+      fresh dmlfile2; near=; dmlsha="$(sha "$scratch/model/hdemucs-dml.onnx")"
+      out="$(outcome a wait a)"
+      expect '[ "$out" = "a model stored 1 a cache " ] && ! has "isn'"'"'t the expected file"' "the expected hdemucs-dml.onnx: accepted (no DirectML here: the model itself runs): got \"$out\""
+      rm -f "$scratch/model/hdemucs-dml.onnx"
+    fi
     fresh exact; near=
     out="$(outcome a wait a d wait d a)"
     expect '[ "$out" = "a model stored 1 a cache d model stored 2 d cache a cache " ]' "exact hits: got \"$out\""
