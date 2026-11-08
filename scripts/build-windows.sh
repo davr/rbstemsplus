@@ -101,8 +101,8 @@ fi
 
 echo "== the DirectML model (experimental: a fixed-shape copy, scripts/dml-model)"
 dml_model="stemsplus-model-dml.onnx"
-python3 -I -c "import onnx, onnxsim, onnxruntime, numpy" 2> /dev/null || die "the DirectML model needs: pip install onnx onnxsim onnxruntime numpy"
-python3 -I "$root/scripts/dml-model/make_dml_model.py" "$dist/$model" "$dist/$dml_model.part" --check > "$root/build/dml-model.log" 2>&1 \
+python3 -P -c "import onnx, onnxsim, onnxruntime, numpy" 2> /dev/null || die "the DirectML model needs: pip install onnx onnxsim onnxruntime numpy"
+python3 -P "$root/scripts/dml-model/make_dml_model.py" "$dist/$model" "$dist/$dml_model.part" --check > "$root/build/dml-model.log" 2>&1 \
   || { tail -20 "$root/build/dml-model.log"; die "the DirectML model wasn't made"; }
 grep -q "^x max |new| 0.0 " "$root/build/dml-model.log" || die "the DirectML model's x isn't all zero"
 python3 -I - "$root/build/dml-model.log" <<'EOF' || die "the DirectML model differs from the model"
