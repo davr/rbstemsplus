@@ -93,6 +93,14 @@ Legend: [x] done · [~] in progress · [ ] to do · [!] blocked or needs the use
   - **Not run yet:** this session can't trigger GitHub Actions; it runs on push.
 - [x] Docs: `docs/windows.md` (install, what changes, lights, updates, uninstall, troubleshooting, building), the README intro and FAQ, `docs/RELEASING.md`, and the Makefile targets `windows`, `bridge-win` and `windows-test`.
 
+## Test releases (prereleases on davr/rbstemsplus)
+- `.github/workflows/windows-prerelease.yml` builds a **test build** whose app and `bootstrap.ps1` download from the prerelease itself, signed with a key made fresh on the runner, and publishes it.
+- **How to start it:** change `.github/windows-prerelease.tag` (one line, the new tag, e.g. `windows-test-2`) and push the branch.
+  - This session can't push tags (the git proxy refuses), and `workflow_dispatch` only works once the workflow file is on the default branch.
+  - GitHub creates the tag on the built commit.
+- The first one is `windows-test-1`, started at 4e539e3.
+- The CI `windows` job failed natively at first: MSYS2's objdump output (CRLF) broke the export check. Fixed in `bridge/win/build.sh` (CRs stripped, any indentation accepted).
+
 ## Verification still owed
 - [x] The bridge builds under mingw, and the export, ordinal and import checks pass.
 - [x] The harness passes under wine with the fake ORT, Microsoft's ORT 1.18.1 and **Pioneer's ORT 1.18.0**: 117 passed.

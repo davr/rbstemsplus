@@ -23,8 +23,6 @@ FLAC_URLS="https://downloads.xiph.org/releases/flac/flac-$FLAC_VERSION.tar.xz ht
 HOST=x86_64-w64-mingw32
 CC="${CC_WIN:-$HOST-gcc}"
 command -v "$CC" > /dev/null || { [ -z "${CC_WIN:-}" ] && command -v gcc > /dev/null && gcc -dumpmachine | grep -q "^$HOST" && CC=gcc; } || true   # MSYS2's MINGW64 shell
-OBJDUMP="$HOST-objdump"
-command -v "$OBJDUMP" > /dev/null || OBJDUMP=objdump
 LIB=onnxruntime.dll
 
 test_path=
@@ -113,28 +111,15 @@ fi
 
 fail() { echo "bridge/win/build.sh: $*" >&2; exit 1; }
 lib="$out/$LIB"
-# CRs stripped and any indentation accepted: MSYS2's mingw-native objdump writes CRLF
-dump="$($OBJDUMP -p "$lib" | tr -d '\r')"
-echo "$dump" | grep -q 'file format pei-x86-64' || fail "not an x64 DLL"
-# exports and their ordinals, exactly as exports.def says
-got="$(echo "$dump" | awk '/\[Ordinal\/Name Pointer\] Table/{t=1;next} t&&/^[[:space:]]+\[/{print} t&&!/^[[:space:]]+\[/{t=0}' | sed -E 's/^[[:space:]]+\[ *[0-9]+\] //' | sort | tr '\n' ' ')"
-want="OrtGetApiBase OrtSessionOptionsAppendExecutionProviderEx_DML OrtSessionOptionsAppendExecutionProvider_CPU OrtSessionOptionsAppendExecutionProvider_DML rbstems_marker "
+# the PE tables themselves (pe_tables.py): objdump's text output differs between binutils versions
+tables="$(python3 "$here/pe_tables.py" "$lib" | tr -d '\r')" || fail "couldn't read the DLL's PE tables"
+echo "$tables" | grep -qx "machine x64" || fail "not an x64 DLL"
+# exports and their ordinals, exactly as exports.def says (rekordbox.exe and Demucs3.dll import by ordinal)
+got="$(echo "$tables" | sed -n 's/^export //p' | LC_ALL=C sort | tr '\n' ' ')"
+want="1 OrtGetApiBase 2 OrtSessionOptionsAppendExecutionProviderEx_DML 3 OrtSessionOptionsAppendExecutionProvider_CPU 4 OrtSessionOptionsAppendExecutionProvider_DML 5 rbstems_marker "
 [ "$got" = "$want" ] || fail "exports: $got (expected $want)"
-base="$(echo "$dump" | awk '/Export Address Table -- Ordinal Base/{print $NF; exit}')"
-[ "$base" = 1 ] || fail "ordinal base $base, expected 1"
-eat="$(echo "$dump" | awk '/Export Address Table -- Ordinal Base/{t=1;next} t&&/^[[:space:]]+\[/{print} t&&!/^[[:space:]]+\[/{t=0}')"
-[ "$(echo "$eat" | wc -l | tr -d ' ')" = 5 ] || fail "export address table: $eat"
-# ordinal of each name (objdump: [ index] +base[ ordinal] ... and the name table in ordinal order)
-names="$(echo "$dump" | awk '/\[Ordinal\/Name Pointer\] Table/{t=1;next} t&&/^[[:space:]]+\[/{print} t&&!/^[[:space:]]+\[/{t=0}')"
-for pair in "OrtGetApiBase 1" "OrtSessionOptionsAppendExecutionProviderEx_DML 2" "OrtSessionOptionsAppendExecutionProvider_CPU 3" \
-            "OrtSessionOptionsAppendExecutionProvider_DML 4" "rbstems_marker 5"; do
-  n="${pair% *}"; o="${pair#* }"
-  idx="$(echo "$names" | awk -v n="$n" '$NF==n{s=$0; sub(/^[^[]*\[ */,"",s); sub(/\].*/,"",s); print s}')"
-  [ -n "$idx" ] || fail "$n is not exported"
-  [ "$((idx + 1))" = "$o" ] || fail "$n has ordinal $((idx + 1)), expected $o"
-done
 # imports: system DLLs only (no libgcc, libwinpthread, libFLAC DLLs)
-for d in $(echo "$dump" | awk '/DLL Name:/{print tolower($3)}' | sort -u); do
+for d in $(echo "$tables" | sed -n 's/^import //p' | sort -u); do
   case "$d" in kernel32.dll|advapi32.dll|shell32.dll|ole32.dll|msvcrt.dll|ucrtbase.dll|api-ms-win-crt-*.dll|ntdll.dll|user32.dll) ;;
     *) fail "links $d" ;; esac
 done
