@@ -18,18 +18,18 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: tools
+      - name: "tools"
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update -qq
           sudo apt-get install -y -qq mingw-w64 wine64 wine xz-utils unzip > /dev/null
       - uses: actions/setup-dotnet@v4
         with: { dotnet-version: "8.0.x" }
-      - name: the bridge's tests (wine)
+      - name: "the bridge's tests (wine)"
         run: RBSTEMS_NO_SKIP= bridge/win/tests/run.sh
-      - name: the app's tests
+      - name: "the app's tests"
         run: dotnet test windows/RBStemsPlus.Tests
-      - name: a test build
+      - name: "a test build"
         run: |
           git config user.email ci@example.invalid && git config user.name ci
           scripts/build-windows.sh --test http://127.0.0.1:8765/
@@ -54,16 +54,16 @@ jobs:
         with:
           msystem: MINGW64
           install: mingw-w64-x86_64-gcc make python unzip curl tar xz
-      - name: the bridge's tests (native, the ACL check included)
+      - name: "the bridge's tests (native, the ACL check included)"
         shell: msys2 {0}
         run: bridge/win/tests/run.sh
       - uses: actions/setup-dotnet@v4
         with: { dotnet-version: "8.0.x" }
-      - name: the app's tests (Windows: the ACL test included)
+      - name: "the app's tests (Windows: the ACL test included)"
         run: dotnet test windows/RBStemsPlus.Tests
       - uses: actions/download-artifact@v4
         with: { name: dist-test, path: dist-test }
-      - name: the install command, against the test build
+      - name: "the install command, against the test build"
         shell: pwsh
         run: |
           $server = Start-Process python -ArgumentList "-m","http.server","8765","--bind","127.0.0.1","--directory","dist-test" -PassThru -WindowStyle Hidden
