@@ -7,12 +7,45 @@ These are facts that matter for the port, recorded as they turn up. **Verified**
 - App: **C# .NET 8 WinForms**, a single self-contained exe for win-x64.
 - Bridge: a **separate Windows fork** in `bridge/win/`. The macOS bridge (`bridge/rbstems_bridge.c`) and the rest of the macOS app stay untouched.
 
-## rekordbox on Windows
-- Verified: rekordbox's settings folder is `%APPDATA%\Pioneer\rekordbox6`. On macOS it is `~/Library/Application Support/Pioneer/rekordbox6` (Pioneer forum).
-- Assumed: the model is at `%APPDATA%\Pioneer\rekordbox6\models\demucs3_model\hdemucs.onnx`, with `demucs3_ver.txt` beside it, the same layout as macOS (`app/Sources/Paths.swift:53`).
-- Assumed: rekordbox installs under `C:\Program Files\Pioneer\rekordbox 7.x.y\`, findable through the `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*` keys (InstallLocation, DisplayVersion).
-- Assumed: `onnxruntime.dll` sits next to `rekordbox.exe`. Unknown: whether it is a DirectML build, and whether rekordbox checks its DLLs' integrity.
-- Nothing public describes rekordbox's Windows ORT. The web searches turned up nothing.
+## rekordbox on Windows: probe results from the user's PC (2026-11-08)
+Windows 11 Pro 26200, x64, PowerShell 5.1. The full report is not committed (it is the user's).
+
+**Installs**
+- Several versions are installed side by side: 6.7.4, 6.8.5, 7.0.4, 7.0.8 and **7.2.14** (the one in use).
+- rekordbox 7 lives in **`C:\Program Files\rekordbox\rekordbox 7.x.y\`**; rekordbox 6 used `C:\Program Files\Pioneer\...`.
+- The uninstall key is `HKLM\...\Uninstall\Pioneer rekordbox 7.2.14`. `DisplayName` is "rekordbox 7.2.14 64bit", `DisplayVersion` is `7.2.14.0323`, and the publisher is AlphaTheta. **`InstallLocation` is empty**: take the folder from `UninstallString` (`<dir>\Uninstall rekordbox.exe`).
+- `HKLM\SOFTWARE\AlphaTheta\rekordbox7.2.14\Capabilities` exists, one key per version.
+- `rekordbox.exe` reports FileVersion `7.2.14.0` and ProductVersion `7.2.14.0323`. It is Authenticode-signed by **CN=AlphaTheta Corporation**, thumbprint `A17B3657248EBBA9870D66890D90D8BF00EE22D8`. Its files are owned by BUILTIN\Administrators.
+- While the probe ran, an installer named `Install_rekordbox_x64_7_2_14` was running. The watcher must wait for processes named `Install_rekordbox*` and `Upmgr rekordbox`.
+
+**ONNX Runtime**
+- `onnxruntime.dll` sits in the install folder, beside `rekordbox.exe`. Size 17,729,456, sha256 `6fd1738a02a71d40dbb5609166c96209473957313f4921b1170b61ad5c6f8e3a`, signed by AlphaTheta.
+- Its version resource says only **"Internal Build"**, so the version must come from `GetVersionString` or from the standalone `1.x.y` string in the file. The stock ORT keeps `"1.18.1"` that way.
+- It is a **DirectML build**. It delay-loads `DirectML.dll` (ordinal 2, `DMLCreateDevice1`), `d3d12`, `dxgi` and `dxcore`. `DirectML.dll` is 1.14.1, the DirectML that ORT 1.18 ships with, so ORT is very likely 1.18.x. The probe update reads the version string to confirm.
+- **Exports, with their ordinals:**
+  - `OrtGetApiBase` @1
+  - `OrtSessionOptionsAppendExecutionProviderEx_DML` @2
+  - `OrtSessionOptionsAppendExecutionProvider_CPU` @3
+  - `OrtSessionOptionsAppendExecutionProvider_DML` @4
+- **The importers bind by ordinal:** `rekordbox.exe` imports ordinals 4 and 1, and **`Demucs3.dll`** imports ordinals 1 and 4. The bridge's `.def` must give these four functions the same ordinals, and should not export other functions at low ordinals.
+  - Signatures (ORT 1.18 `dml_provider_factory.h`):
+    - `OrtSessionOptionsAppendExecutionProvider_DML(OrtSessionOptions*, int device_id)`
+    - `OrtSessionOptionsAppendExecutionProviderEx_DML(OrtSessionOptions*, IDMLDevice*, ID3D12CommandQueue*)`
+  - A pass-through with the same argument registers is fine: a void* for each pointer.
+- `rekordbox.exe` also uses ORT for other models in `<install>\models\` (cue detection, embeddings). Those sessions pass through.
+
+**STEMS**
+- The STEMS separator is **`Demucs3.dll`** (429,488 bytes) in the install folder. `rekordbox.exe` names it as a string, so it probably loads it at run time. `Spleeter.dll` is the older separator.
+- rekordbox also ships **TensorFlow** (`tensorflow_cc.dll`). The model folder has `stft_model\` and `istft_model\` (Keras SavedModels), so on Windows the STFT and iSTFT run in TensorFlow and the Demucs network runs in ORT.
+- The model is at **`%APPDATA%\Pioneer\rekordbox6\models\demucs3_model\hdemucs.onnx`**, 335,027,281 bytes, sha256 **`435c987855f7ea74ff5f20090541748cbbce5a2e8e501d07b10f4e703453215a` = `PIONEER_0002`**, the same file as on macOS. `demucs3_ver.txt` holds `0002`, with a `demucs3_ver.bak` beside it. The same model means the same `mix`/`mag` to `x`/`xt` interface and the same rebuild maths.
+- Downloads come from `https://dl.rekordbox.com/application/models/demucs3/` (`demucs3_xxxx.zip`) and `.../models/stems/`.
+
+**Still unknown**
+- Whether `Demucs3.dll` opens the model by path (CreateSession) or from memory (CreateSessionFromArray). The Windows bridge hooks **both**: a session from an array is identified by the sha256 of its bytes.
+- Whether rekordbox checks the signatures of its own DLLs. Only a real test will show.
+- Whether rekordbox appends the DML execution provider to the Demucs session. Our model may fall back to CPU for ops DML doesn't support.
+
+**Compat list** for Windows to start with: rekordbox `7.2.14` (the user's version), ORT prefix `1.18.` (to be confirmed), STEMS Engine `0002`.
 
 ## Stock ONNX Runtime 1.18.1 for win-x64 (verified)
 - `onnxruntime-win-x64-1.18.1.zip` from microsoft/onnxruntime releases. A copy is in `build/ort/` (gitignored).

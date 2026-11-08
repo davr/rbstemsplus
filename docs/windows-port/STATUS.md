@@ -12,7 +12,9 @@ Legend: [x] done · [~] in progress · [ ] to do · [!] blocked or needs the use
   - the ORT DLLs, with each one's exports, sha256 and signer;
   - rekordbox.exe's imports;
   - the model folder and its hashes.
-- [!] **Waiting on the user:** run the probe on a real Windows PC and send back `rbstemsplus-probe.txt`. That output fills `exports.def`, the default paths and the compat lists.
+- [x] First probe run received (rekordbox 7.2.14); findings are in NOTES.md.
+- [x] Probe updated: reads ORT's version string from the DLL, scans `Demucs3.dll`/`Spleeter.dll` strings, and fixes the process-modules error.
+- [!] **Waiting on the user:** re-run the updated probe (`-RekordboxDir "C:\Program Files\rekordbox\rekordbox 7.2.14"`) to confirm the ORT version and how `Demucs3.dll` names the model. That output fills `exports.def`, the default paths and the compat lists.
 
 ## Phase 1: Windows bridge (`bridge/win/`)
 - [~] `win_compat.h`: Win32 stand-ins. Written, not yet compiled. It covers:
@@ -36,7 +38,13 @@ Legend: [x] done · [~] in progress · [ ] to do · [!] blocked or needs the use
   - the ACL check replaces `only_root_can_change`;
   - `LoadLibraryExW`;
   - volume checks for the chosen location.
-- [ ] `exports.def`: `OrtGetApiBase`, `OrtSessionOptionsAppendExecutionProvider_CPU`, `_DML`, `_CUDA` and `rbstems_marker`.
+- [ ] `exports.def` with **fixed ordinals**, as rekordbox.exe and Demucs3.dll import by ordinal:
+  - `OrtGetApiBase` @1
+  - `…ProviderEx_DML` @2
+  - `…_CPU` @3
+  - `…_DML` @4
+  - `rbstems_marker` @5 or higher
+- [ ] Hook `CreateSessionFromArray` too (the sha256 of the bytes picks the model), in case `Demucs3.dll` loads the model from memory.
 - [ ] `bridge/win/build.sh`:
   - libFLAC for the mingw host;
   - checks that the exports and imports match;

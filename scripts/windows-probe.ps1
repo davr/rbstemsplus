@@ -234,7 +234,28 @@ function Find-Strings([string]$path, [string[]]$needles) {
     return ($found | Select-Object -Unique | Select-Object -First 40)
 }
 
-function Describe-Binary([string]$path, [switch]$WithExports, [switch]$WithImports, [switch]$WithStrings) {
+# version-like strings standing alone between NULs ("1.18.1"): ONNX Runtime keeps its version so,
+# and Pioneer's build has no version resource
+function Find-VersionStrings([string]$path) {
+    $found = @{}
+    try {
+        $fs = [System.IO.File]::Open($path, 'Open', 'Read', 'ReadWrite,Delete')
+        try {
+            $chunk = 16MB; $pos = 0L
+            while ($pos -lt $fs.Length) {
+                $len = [int][Math]::Min([long]$chunk + 64, $fs.Length - $pos)
+                $a = [System.Text.Encoding]::ASCII.GetString((Read-At $fs $pos $len))
+                foreach ($m in [regex]::Matches($a, "\x00(1\.[0-9]{1,2}\.[0-9]{1,3}(?:\.[0-9.]+)?)\x00")) { $found[$m.Groups[1].Value] = 1 }
+                foreach ($m in [regex]::Matches($a, "[^\x00-\x1F]{0,40}(?:onnxruntime|ORT)[^\x00-\x1F]{0,10}1\.[0-9]{1,2}\.[0-9][^\x00-\x1F]{0,40}")) { $found[$m.Value] = 1 }
+                $pos += $chunk
+            }
+        } finally { $fs.Dispose() }
+    } catch { return @("(not read: $($_.Exception.Message))") }
+    return @($found.Keys | Sort-Object | Select-Object -First 30)
+}
+
+function Describe-Binary([string]$path, [switch]$WithExports, [switch]$WithImports, [switch]$WithStrings, [switch]$WithVersions,
+                         [string[]]$Needles = @('onnxruntime', 'hdemucs', 'demucs3', 'DirectML', 'DmlExecutionProvider', 'OrtGetApiBase', 'AppendExecutionProvider', '.onnx')) {
     $fi = Get-Item -LiteralPath $path
     Out-Line ""
     Out-Line "--- $path"
@@ -268,8 +289,13 @@ function Describe-Binary([string]$path, [switch]$WithExports, [switch]$WithImpor
             }
         } catch { Out-Line "    imports: (not read: $($_.Exception.Message))" }
     }
+    if ($WithVersions) {
+        $vs = @(Find-VersionStrings $path)
+        Out-Line "    version-like strings ($($vs.Count)):"
+        foreach ($v in $vs) { Out-Line "      $v" }
+    }
     if ($WithStrings) {
-        $st = @(Find-Strings $path @('onnxruntime', 'hdemucs', 'demucs3', 'DirectML', 'DmlExecutionProvider', 'OrtGetApiBase', 'AppendExecutionProvider', '.onnx'))
+        $st = @(Find-Strings $path $Needles)
         Out-Line "    strings ($($st.Count) shown):"
         foreach ($s in $st) { Out-Line "      $s" }
     }
@@ -359,9 +385,13 @@ Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match
     $path = "?"
     try { $path = $_.Path } catch {}
     Out-Line "$($_.ProcessName) pid=$($_.Id) path=$path"
-    try {
-        $_.Modules | Where-Object { $_.ModuleName -match 'onnx|directml|dml' } | ForEach-Object { Out-Line "    loaded module: $($_.FileName)" }
-    } catch { Out-Line "    (its modules couldn't be listed: $($_.Exception.Message))" }
+    $mods = $null
+    try { $mods = @($_.Modules) } catch { Out-Line "    (its modules couldn't be listed: $($_.Exception.Message))" }
+    if ($mods) {
+        foreach ($m in $mods) {
+            if ($m -and $m.PSObject.Properties['ModuleName'] -and $m.ModuleName -match 'onnx|directml|dml|demucs') { Out-Line "    loaded module: $($m.FileName)" }
+        }
+    }
 }
 
 foreach ($d in $installs) {
@@ -382,7 +412,18 @@ foreach ($d in $installs) {
     $orts = @($all | Where-Object { $_.Name -match 'onnx|directml|dml|ort[_.]' -and $_.Extension -match '\.(dll|so|exe)$' })
     Out-Line ""
     Out-Line "ONNX Runtime / DirectML related binaries: $($orts.Count)"
-    foreach ($o in $orts) { Describe-Binary $o.FullName -WithExports -WithImports }
+    foreach ($o in $orts) {
+        if ($o.Name -match 'onnxruntime') { Describe-Binary $o.FullName -WithExports -WithImports -WithVersions }
+        else { Describe-Binary $o.FullName -WithExports -WithImports }
+    }
+
+    # the separators rekordbox loads (Demucs3.dll uses ONNX Runtime): how they name the model
+    $seps = @($all | Where-Object { $_.Name -match '^(Demucs|Spleeter).*\.dll$' })
+    Out-Line ""
+    Out-Line "STEMS separator DLLs: $($seps.Count)"
+    foreach ($o in $seps) {
+        Describe-Binary $o.FullName -WithExports -WithImports -WithStrings -Needles @('onnx', 'hdemucs', 'demucs', 'model', 'DML', 'DirectML', 'GetApiBase', 'Session', '"mix"', 'mag', 'stft')
+    }
 
     $models = @($all | Where-Object { $_.Extension -match '\.(onnx|ort|pt|bin|mlmodel|mlmodelc)$' -or $_.Name -match 'demucs|stem' })
     if ($models.Count) {
