@@ -33,7 +33,18 @@ esac
 
 # ---------------------------------------------------------------- build
 
-app="$scratch/app"; real_dir="$scratch/real"; mkdir -p "$app" "$real_dir" "$scratch/model"
+app="$scratch/app"; real_dir="$scratch/rt/real"; mkdir -p "$app" "$real_dir" "$scratch/model"
+# icacls with MSYS2's argument conversion off (it would turn /grant into a path)
+icacls_w() { MSYS2_ARG_CONV_EXCL='*' icacls "$@"; }
+if [ -n "$native" ]; then
+  # on Windows the bridge checks the real library's permissions for real (acl_ok): it and its two
+  # parent folders may be changed only by Administrators, SYSTEM (and, in a test build, this
+  # account), as the installer sets %ProgramData%\rbstemsplus. MSYS2's temp folder lets others write.
+  for d in "$scratch/rt" "$real_dir"; do
+    icacls_w "$(winpath "$d")" /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "$USERNAME:(OI)(CI)F" > /dev/null \
+      || { echo "FAIL couldn't set the test folder's permissions"; exit 1; }
+  done
+fi
 "$root/bridge/win/build.sh" --test "$(winpath "$real_dir/onnxruntime.dll")" "$app" > "$scratch/build.log" 2>&1 \
   || { tail -20 "$scratch/build.log"; echo "FAIL the test bridge didn't build"; exit 1; }
 "$root/bridge/win/build.sh" --unit "$app" >> "$scratch/build.log" 2>&1 || { tail -20 "$scratch/build.log"; echo "FAIL unit.exe didn't build"; exit 1; }
@@ -214,7 +225,7 @@ else
   # ---------------------------------------------------------------- the real library's permissions (Windows only)
   if [ -n "$native" ]; then
     fresh acl; point "$ort"
-    icacls "$(winpath "$real_dir/onnxruntime.dll")" /grant '*S-1-1-0:(M)' > /dev/null
+    icacls_w "$(winpath "$real_dir/onnxruntime.dll")" /grant '*S-1-1-0:(M)' > /dev/null
     harness missing > /dev/null
     expect 'has "can be changed by others than administrators: not loaded"' "a real library Everyone can change is refused"
   else
