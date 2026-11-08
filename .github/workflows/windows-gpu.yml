@@ -1,0 +1,36 @@
+# Runs the separation benchmark on a Windows machine with a GPU that is registered as a self-hosted
+# runner of this repository (labels: self-hosted, windows, gpu): see docs/windows-port/GPU-RUNNER.md.
+# Started by hand (workflow_dispatch). Nothing here runs on GitHub-hosted runners.
+name: windows-gpu
+on:
+  workflow_dispatch:
+    inputs:
+      model_tag: { description: "release whose models to benchmark", default: "windows-test-6dml2" }
+      chunks: { description: "chunks per run (the first is warm-up)", default: "4" }
+permissions:
+  contents: read
+jobs:
+  bench:
+    runs-on: [self-hosted, windows, gpu]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc make python unzip curl tar xz
+      - name: "benchmark"
+        shell: msys2 {0}
+        env:
+          RBSTEMS_PIONEER_DIR: ${{ vars.RBSTEMS_PIONEER_DIR }}
+          RBSTEMS_MODEL_TAG: ${{ inputs.model_tag }}
+          RBSTEMS_BENCH_CHUNKS: ${{ inputs.chunks }}
+        run: |
+          RBSTEMS_PIONEER_DIR="$(cygpath -u "$RBSTEMS_PIONEER_DIR")" scripts/gpu-bench.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gpu-bench-logs
+          path: |
+            build/gpu-bench/home-*/AppData/Local/rbstemsplus/Logs/bridge.log
+            build/gpu-bench/build.log

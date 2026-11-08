@@ -30,6 +30,9 @@
  *                               "wrong". More WHAT: w=W0,W1,W2,W3 (the model's weights, needed to
  *                               check answers), frames=N (F from now on; default ceil(L / 1024)),
  *                               gain=G (each chunk from now on scaled by G; answers then unchecked)
+ *   harness bench MODEL N       a benchmark, not a test: N chunks of 485,100 samples (mag [1,4,2048,474]) through
+ *                               a session on MODEL, each timed ("bench chunk i: S s, Nx real time"); the bridge's
+ *                               own choices (DirectML, the fixed-shape model) apply, as in rekordbox
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -437,12 +440,62 @@ static int run(const char *model, int argc, char **argv, int pioneer) {
     return 0;
 }
 
+static int bench(const char *model, int n) {
+    enum { BL = 485100, BF = 474 };
+    const OrtApiBase *b = OrtGetApiBase();
+    const OrtApi *a = b ? b->GetApi(ORT_API_VERSION) : NULL;
+    if (!a) { printf("FAIL an OrtApi\n"); return 1; }
+    OrtEnv *env = NULL;
+    OrtSessionOptions *so = NULL;
+    OrtSession *s = NULL;
+    OrtMemoryInfo *mi = NULL;
+    wchar_t wmodel[1024];
+    OrtStatus *st = a->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "rbstems-bench", &env);
+    if (!st) st = a->CreateSessionOptions(&so);
+    if (!st) st = a->SetIntraOpNumThreads(so, 4);
+    if (!st && !MultiByteToWideChar(CP_UTF8, 0, model, -1, wmodel, 1024)) { printf("FAIL model path\n"); return 1; }
+    LARGE_INTEGER f0, t0, t1;
+    QueryPerformanceFrequency(&f0);
+    QueryPerformanceCounter(&t0);
+    if (!st) st = a->CreateSession(env, wmodel, so, &s);
+    QueryPerformanceCounter(&t1);
+    if (!st) st = a->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi);
+    if (st) { printf("FAIL session: %s\n", a->GetErrorMessage(st)); return 1; }
+    printf("bench session: %.1f s\n", (double)(t1.QuadPart - t0.QuadPart) / f0.QuadPart);
+    float *mix = malloc(sizeof(float) * 2 * BL), *mag = malloc(sizeof(float) * 4 * 2048 * BF);
+    for (size_t i = 0; i < 2 * (size_t)BL; i++) mix[i] = (float)(0.1 * sin(0.01 * (double)i));
+    for (size_t i = 0; i < (size_t)4 * 2048 * BF; i++) mag[i] = (float)fabs(0.37 * sin(0.001 * (double)i + 1.0));
+    int64_t mdims[3] = {1, 2, BL}, gdims[4] = {1, 4, 2048, BF};
+    double total = 0;
+    for (int i = 0; i < n; i++) {
+        OrtValue *in[2] = {NULL, NULL}, *out[2] = {NULL, NULL};
+        const char *in_names[] = {"mix", "mag"}, *out_names[] = {"x", "xt"};
+        st = a->CreateTensorWithDataAsOrtValue(mi, mix, sizeof(float) * 2 * BL, mdims, 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in[0]);
+        if (!st) st = a->CreateTensorWithDataAsOrtValue(mi, mag, sizeof(float) * 4 * 2048 * BF, gdims, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in[1]);
+        QueryPerformanceCounter(&t0);
+        if (!st) st = a->Run(s, NULL, in_names, (const OrtValue *const *)in, 2, out_names, 2, out);
+        QueryPerformanceCounter(&t1);
+        if (st) { printf("FAIL bench run %d: %s\n", i, a->GetErrorMessage(st)); return 1; }
+        double sec = (double)(t1.QuadPart - t0.QuadPart) / f0.QuadPart;
+        if (i > 0) total += sec;                          /* the first run is warm-up */
+        printf("bench chunk %d: %.2f s, %.2fx real time%s\n", i, sec, (BL / 44100.0) / sec, i == 0 ? " (warm-up)" : "");
+        a->ReleaseValue(in[0]); a->ReleaseValue(in[1]); a->ReleaseValue(out[0]); a->ReleaseValue(out[1]);
+    }
+    if (n > 1) printf("bench average (without the first): %.2f s, %.2fx real time\n", total / (n - 1), (BL / 44100.0) / (total / (n - 1)));
+    a->ReleaseSession(s);
+    a->ReleaseMemoryInfo(mi);
+    a->ReleaseSessionOptions(so);
+    a->ReleaseEnv(env);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     if (argc == 3 && !strcmp(argv[1], "load")) return load(argv[2]);
     if (argc == 3 && !strcmp(argv[1], "passthrough")) return passthrough(argv[2]);
     if (argc == 2 && !strcmp(argv[1], "missing")) return missing();
     if (argc >= 3 && !strcmp(argv[1], "run")) return run(argv[2], argc - 3, argv + 3, 0);
+    if (argc == 4 && !strcmp(argv[1], "bench")) return bench(argv[2], atoi(argv[3]));
     if (argc >= 3 && !strcmp(argv[1], "prun")) return run(argv[2], argc - 3, argv + 3, 1);
     fprintf(stderr, "usage: see the top of harness.c\n");
     return 2;
