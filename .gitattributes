@@ -1,0 +1,2 @@
+# test fixtures are byte-exact: never converted to CRLF on Windows checkouts
+tests/*.txt text eol=lf

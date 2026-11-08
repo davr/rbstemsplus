@@ -43,7 +43,8 @@ static class Fixtures
 
     public static IEnumerable<(string Name, string Expected, byte[] Content)> Read(string file)
     {
-        foreach (var line in File.ReadAllText(Path.Combine(Repo, "tests", file)).Split('\n'))
+        // "\r\n" too: a Windows checkout may convert the fixture files (.gitattributes keeps them LF)
+        foreach (var line in File.ReadAllText(Path.Combine(Repo, "tests", file)).Replace("\r\n", "\n").Split('\n'))
         {
             if (line.Length == 0 || line.StartsWith('#')) continue;
             var parts = line.Split('\t', 3);
