@@ -78,11 +78,30 @@ Legend: [x] done · [~] in progress · [ ] to do · [!] blocked or needs the use
   - LocationMonitor's drive-change events (the window refreshes every 5 s instead).
 
 ## Phase 6: release, bootstrap, CI, docs
-- [ ] `scripts/build-windows.sh`, `scripts/bootstrap.ps1`, `release.sh` additions, `.github/workflows/windows.yml`
-- [ ] README Windows section, `docs/windows.md`, RELEASING.md, Makefile targets
+- [x] `scripts/build-windows.sh [--test URL]` runs on Linux or macOS.
+  - It makes `rbstemsplus-windows.zip` (66 MB), `onnxruntime.dll`, `bootstrap.ps1` (keys written in), `payload-windows.json` and `SHA256SUMS-windows`.
+  - The model comes from `dist/`, from `RBSTEMSPLUS_MODEL`, or is downloaded (resumably) from the published release and checked by sha256.
+  - A test build signs with `build/test-keys`. **A local test build worked**, and the C# test verifies its openssl signature.
+- [x] `scripts/bootstrap.ps1`, the `irm … | iex` installer, works on PS 5.1 and 7.
+  - It checks the ECDSA signature itself: SPKI to a CNG EccPublicBlob, DER to r‖s, then ECDsaCng.
+  - It refuses duplicate JSON keys and payloads older than its minimum, checks the zip's sha256, installs to `%LOCALAPPDATA%\Programs\RB Stems Plus`, adds a Start menu shortcut, and starts the app.
+  - **Not run here** (no PowerShell); the CI windows job runs it against the served test build.
+- [x] `scripts/release.sh --windows` builds, checks, signs (same key) and uploads the Windows assets with the macOS release. Without `--windows`, nothing changes.
+- [x] `.github/workflows/windows.yml`:
+  - **Linux job:** the bridge tests under wine, `dotnet test`, a test build, and the artifact upload.
+  - **Windows job:** the bridge tests natively in MSYS2 (with the ACL test), `dotnet test` (with the ACL test of `SecureRoot`), and `bootstrap.ps1` against the test build served on localhost.
+  - **Not run yet:** this session can't trigger GitHub Actions; it runs on push.
+- [x] Docs: `docs/windows.md` (install, what changes, lights, updates, uninstall, troubleshooting, building), the README intro and FAQ, `docs/RELEASING.md`, and the Makefile targets `windows`, `bridge-win` and `windows-test`.
 
 ## Verification still owed
-- [ ] Bridge builds under mingw; the export and import checks pass
-- [ ] Harness under wine with the fake ORT and the stock ORT 1.18.1 (cache miss, then hit)
-- [ ] `dotnet test` green
-- [!] A real end-to-end test on a Windows PC with rekordbox 7 (the user)
+- [x] The bridge builds under mingw, and the export, ordinal and import checks pass.
+- [x] The harness passes under wine with the fake ORT, Microsoft's ORT 1.18.1 and **Pioneer's ORT 1.18.0**: 117 passed.
+- [x] `dotnet test` passes (110).
+- [x] Elevated install and uninstall under wine, with Pioneer's DLL, restore byte for byte.
+- [ ] The CI windows job: the native bridge tests with ACLs, the app's ACL test, and `bootstrap.ps1`.
+- [!] **A real end-to-end test on the user's Windows PC with rekordbox 7.2.14:**
+  - install both features (UAC for Stems Cache);
+  - load a track with STEMS twice, and check that `%LOCALAPPDATA%\rbstemsplus\Logs\bridge.log` shows "hit";
+  - check that rekordbox starts at all with the bridge in place (does rekordbox check its DLLs' integrity?);
+  - uninstall completely, and check that Pioneer's files come back.
+- [!] **Unknown until that test:** does rekordbox append the DirectML provider to the Demucs session, and does our Demucs v4 model run under DML? It falls back to CPU for unsupported ops.

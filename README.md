@@ -1,7 +1,7 @@
 # RB Stems Plus
 
-**A different stems model and much faster reloads for rekordbox's STEMS, on the Mac.** Free and
-open source.
+**A different stems model and much faster reloads for rekordbox's STEMS, on the Mac and on
+Windows.** Free and open source. Windows users: see **[RB Stems Plus on Windows](docs/windows.md)**.
 
 [What it does](#what-it-does) · [What you get](#what-you-get) · [Install](#install) ·
 [FAQ](#faq) · [Troubleshooting](docs/troubleshooting.md) · [Get help](#get-help)
@@ -282,7 +282,9 @@ RB Stems Plus knows; Stems Cache only with the rekordbox versions it was tested 
 7.2.19 at release). The list is updated online, and the app tells you if your version isn't on it
 yet.
 
-**Which Macs? Windows?** Mac only. Tested on macOS 26 Tahoe on an Apple Silicon Mac.
+**Which Macs? Windows?** Tested on macOS 26 Tahoe on an Apple Silicon Mac. Windows 10 and 11
+(64-bit) are supported too, tested with rekordbox 7.2.14: see [RB Stems Plus on Windows](docs/windows.md)
+for its install command and what differs.
 
 **Do I need both features?** No. Each works on its own: Demucs v4 changes the model, Stems Cache
 saves the stems of whichever model rekordbox uses. Install one, both, or add the other later.

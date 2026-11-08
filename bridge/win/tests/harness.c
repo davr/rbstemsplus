@@ -121,7 +121,9 @@ static int load(const char *real) {
         snprintf(what, sizeof what, "the bridge's ordinal %d is %s", i + 1, by_ordinal[i]);
         check(o && o == n, what);
         FARPROC ro = rm ? GetProcAddress(rm, (LPCSTR)(uintptr_t)(i + 1)) : NULL, rn = rm ? GetProcAddress(rm, by_ordinal[i]) : NULL;
-        if (i == 0 || i == 2 || rn) {                    /* the stock build has no DirectML exports */
+        /* the real library's ordinals: Pioneer's layout only in a DirectML build like Pioneer's
+         * (Microsoft's CPU build numbers its two exports 1 and 2) */
+        if (rm && GetProcAddress(rm, "OrtSessionOptionsAppendExecutionProvider_DML")) {
             snprintf(what, sizeof what, "the real library's ordinal %d is %s too", i + 1, by_ordinal[i]);
             check(!rn || ro == rn, what);
         }

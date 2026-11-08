@@ -397,3 +397,61 @@ public class LocationTests
         Assert.Equal(0, CacheLocation.EntriesSize(Path.Combine(c, "missing")));
     }
 }
+
+public class BuildOutputTests
+{
+    /// scripts/build-windows.sh --test signs dist-test/payload-windows.json with openssl: the app
+    /// must accept it with the test key, and refuse it with the release keys (skipped without a test build).
+    [Fact]
+    public void TestBuildPayloadVerifiesWithTheTestKeyOnly()
+    {
+        var dist = Path.Combine(Fixtures.Repo, "dist-test");
+        var pem = Path.Combine(Fixtures.Repo, "build", "test-keys", "test.pub.pem");
+        if (!File.Exists(Path.Combine(dist, "payload-windows.json")) || !File.Exists(pem)) return;
+        var data = File.ReadAllBytes(Path.Combine(dist, "payload-windows.json"));
+        var sig = File.ReadAllBytes(Path.Combine(dist, "payload-windows.json.sig"));
+        var key = TrustedKey.FromPem("test", File.ReadAllText(pem))!;
+        var (m, why) = Payload.Check(data, sig, new() { key }, null);
+        Assert.Equal(PayloadRefusal.None, why);
+        Assert.Equal("onnxruntime.dll", m!.Bridge.File);
+        Assert.Equal(Files.Sha256(Path.Combine(dist, "onnxruntime.dll")), m.Bridge.Sha256);
+        Assert.Equal(Files.Sha256(Path.Combine(dist, m.AppInfo.Zip)), m.AppInfo.Sha256);
+        Assert.Equal(PayloadRefusal.BadSignature, Payload.Check(data, sig, Signing.Compiled, null).Why);
+    }
+}
+
+public class WindowsAclTests
+{
+    /// Elevated.SecureRoot's permissions are the ones the bridge accepts for the real library
+    /// (acl_ok in bridge/win/rbstems_bridge_win.c): owned by Administrators (or SYSTEM), and no ACE
+    /// that lets anyone else write. Windows, as an administrator, only (CI runs it).
+    [Fact]
+    public void SecureRootGivesWhatTheBridgeAccepts()
+    {
+        if (!OperatingSystem.IsWindows() || !Elevated.IsAdmin()) return;
+        var root = Path.Combine(Path.GetTempPath(), "rbsp-acl-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "ort"));
+        File.WriteAllText(Path.Combine(root, "ort", "onnxruntime.dll"), "x");
+        Elevated.SecureRoot(root);
+        foreach (var path in new[] { Path.Combine(root, "ort", "onnxruntime.dll"), Path.Combine(root, "ort"), root })
+        {
+            System.Security.AccessControl.FileSystemSecurity sec = Directory.Exists(path)
+                ? new DirectoryInfo(path).GetAccessControl() : new FileInfo(path).GetAccessControl();
+            var owner = (System.Security.Principal.SecurityIdentifier)sec.GetOwner(typeof(System.Security.Principal.SecurityIdentifier))!;
+            Assert.True(owner.IsWellKnown(System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid) || owner.IsWellKnown(System.Security.Principal.WellKnownSidType.LocalSystemSid), path + " owner " + owner);
+            const System.Security.AccessControl.FileSystemRights writes = System.Security.AccessControl.FileSystemRights.WriteData | System.Security.AccessControl.FileSystemRights.AppendData
+                | System.Security.AccessControl.FileSystemRights.WriteExtendedAttributes | System.Security.AccessControl.FileSystemRights.WriteAttributes
+                | System.Security.AccessControl.FileSystemRights.Delete | System.Security.AccessControl.FileSystemRights.DeleteSubdirectoriesAndFiles
+                | System.Security.AccessControl.FileSystemRights.ChangePermissions | System.Security.AccessControl.FileSystemRights.TakeOwnership;
+            foreach (System.Security.AccessControl.FileSystemAccessRule r in sec.GetAccessRules(true, true, typeof(System.Security.Principal.SecurityIdentifier)))
+            {
+                if (r.AccessControlType != System.Security.AccessControl.AccessControlType.Allow || (r.FileSystemRights & writes) == 0) continue;
+                if (r.PropagationFlags.HasFlag(System.Security.AccessControl.PropagationFlags.InheritOnly)) continue;
+                var sid = (System.Security.Principal.SecurityIdentifier)r.IdentityReference;
+                Assert.True(sid.IsWellKnown(System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid) || sid.IsWellKnown(System.Security.Principal.WellKnownSidType.LocalSystemSid),
+                            $"{path}: {sid} may write ({r.FileSystemRights})");
+            }
+        }
+        Directory.Delete(root, true);
+    }
+}

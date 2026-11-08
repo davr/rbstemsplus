@@ -1,0 +1,81 @@
+# The Windows port's checks. On Linux: the bridge's tests under wine, the app's tests, and a test
+# build. On Windows: the bridge's tests natively (its ACL check included), the app's tests (its ACL
+# test included), and the install command (bootstrap.ps1) against the test build served locally.
+name: windows
+
+on:
+  push:
+    paths: ["bridge/win/**", "windows/**", "scripts/build-windows.sh", "scripts/bootstrap.ps1", "tests/**", ".github/workflows/windows.yml"]
+  pull_request:
+    paths: ["bridge/win/**", "windows/**", "scripts/build-windows.sh", "scripts/bootstrap.ps1", "tests/**", ".github/workflows/windows.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: tools
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mingw-w64 wine64 wine xz-utils unzip > /dev/null
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "8.0.x" }
+      - name: the bridge's tests (wine)
+        run: RBSTEMS_NO_SKIP= bridge/win/tests/run.sh
+      - name: the app's tests
+        run: dotnet test windows/RBStemsPlus.Tests
+      - name: a test build
+        run: |
+          git config user.email ci@example.invalid && git config user.name ci
+          scripts/build-windows.sh --test http://127.0.0.1:8765/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-test
+          path: |
+            dist-test/rbstemsplus-windows.zip
+            dist-test/onnxruntime.dll
+            dist-test/bootstrap.ps1
+            dist-test/payload-windows.json
+            dist-test/payload-windows.json.sig
+            dist-test/SHA256SUMS-windows
+          retention-days: 7
+
+  windows:
+    runs-on: windows-latest
+    needs: linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc make python unzip curl tar xz
+      - name: the bridge's tests (native, the ACL check included)
+        shell: msys2 {0}
+        run: bridge/win/tests/run.sh
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "8.0.x" }
+      - name: the app's tests (Windows: the ACL test included)
+        run: dotnet test windows/RBStemsPlus.Tests
+      - uses: actions/download-artifact@v4
+        with: { name: dist-test, path: dist-test }
+      - name: the install command, against the test build
+        shell: pwsh
+        run: |
+          $server = Start-Process python -ArgumentList "-m","http.server","8765","--bind","127.0.0.1","--directory","dist-test" -PassThru -WindowStyle Hidden
+          Start-Sleep 2
+          try {
+            powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -Raw dist-test/bootstrap.ps1 | Invoke-Expression"
+            if ($LASTEXITCODE) { throw "bootstrap.ps1 failed" }
+            $exe = Join-Path $env:LOCALAPPDATA "Programs\RB Stems Plus\RBStemsPlus.exe"
+            if (-not (Test-Path $exe)) { throw "not installed" }
+            Start-Sleep 5
+            Get-Process RBStemsPlus -ErrorAction SilentlyContinue | Stop-Process -Force
+            $probe = & $exe --probe | Out-String
+            Write-Host $probe
+            if ($probe -notmatch "RB Stems Plus") { throw "--probe didn't run" }
+          } finally { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }

@@ -68,7 +68,10 @@ PUBLIC_NAME="Gabe-LS"
 ASSETS="rbstemsplus-app.zip libonnxruntime.1.18.0.dylib stemsplus-model.onnx bootstrap.sh NOTICE LICENSE payload.json SHA256SUMS"
 
 die() { echo "release.sh: $*" >&2; exit 1; }
-usage() { echo "usage: $0 vX.Y.Z [--key PATH | --backup-key] [--public PATH] [--dry-run]" >&2; exit 2; }
+usage() { echo "usage: $0 vX.Y.Z [--key PATH | --backup-key] [--public PATH] [--windows] [--dry-run]" >&2; exit 2; }
+# --windows: also builds the Windows assets (scripts/build-windows.sh: mingw-w64 and Microsoft's .NET 8
+# SDK), signs payload-windows.json with the same key, and uploads them with the macOS ones
+WIN_ASSETS="rbstemsplus-windows.zip onnxruntime.dll bootstrap.ps1 payload-windows.json SHA256SUMS-windows"
 
 [ $# -ge 1 ] || usage
 tag="$1"; shift
@@ -76,12 +79,14 @@ key="$HOME/.rbstemsplus-signing/release-key.pem"
 backup=0
 dry=0
 pub=""
+windows=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --key) [ $# -ge 2 ] || usage; key="$2"; shift 2 ;;
     --backup-key) backup=1; shift ;;
     --public) [ $# -ge 2 ] || usage; pub="$2"; shift 2 ;;
     --dry-run) dry=1; shift ;;
+    --windows) windows=1; shift ;;
     *) usage ;;
   esac
 done
@@ -297,6 +302,9 @@ for t in "$root"/build/flac/flac-*.tar.xz; do
   mkdir -p "$pub/build/flac" && cp "$t" "$pub/build/flac/"
 done
 "$pub/scripts/build.sh" || die "the build failed (see above)"
+if [ "$windows" = 1 ]; then
+  "$pub/scripts/build-windows.sh" || die "the Windows build failed (see above)"
+fi
 
 # ------------------------------------------------------------------ 6. what was built
 
@@ -308,6 +316,15 @@ for f in $ASSETS; do [ -f "$dist/$f" ] && [ ! -L "$dist/$f" ] || die "dist/$f is
 (cd "$dist" && shasum -a 256 -s -c SHA256SUMS) || die "dist/SHA256SUMS doesn't match the files"
 listed="$(awk '{print $2}' "$dist/SHA256SUMS" | LC_ALL=C sort | tr '\n' ' ')"
 [ "$listed" = "$(printf '%s\n' $ASSETS | grep -vx SHA256SUMS | LC_ALL=C sort | tr '\n' ' ')" ] || die "dist/SHA256SUMS lists: $listed"
+if [ "$windows" = 1 ]; then
+  for f in $WIN_ASSETS; do [ -f "$dist/$f" ] && [ ! -L "$dist/$f" ] || die "dist/$f is missing"; done
+  pw() { python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); v=d
+for k in sys.argv[2].split("."): v=v[k]
+print(v)' "$dist/payload-windows.json" "$1" 2>/dev/null || echo "(missing)"; }
+  [ "$(pw commit)" = "$pub_commit" ] || die "dist/payload-windows.json names commit $(pw commit), not $pub_commit"
+  [ "$(pw payload_version)" = "$version" ] && [ "$(pw app.version)" = "$version" ] || die "dist/payload-windows.json isn't version $version"
+  (cd "$dist" && shasum -a 256 -s -c SHA256SUMS-windows) || die "dist/SHA256SUMS-windows doesn't match the files"
+fi
 [ "$(git -C "$pub" rev-parse HEAD)" = "$pub_commit" ] && [ -z "$(git -C "$pub" status --porcelain)" ] || die "the public clone changed during the build"
 [ "$(git -C "$root" rev-parse HEAD)" = "$commit" ] && [ -z "$(git -C "$root" status --porcelain)" ] || die "the checkout changed during the build"
 
@@ -331,10 +348,18 @@ if [ "$backup" = 1 ]; then
   # through a pipe only: printf is a shell builtin, so the key is in no command line
   printf '%s' "$pem" | /usr/bin/openssl dgst -sha256 -sign /dev/stdin -out "$sig" "$dist/payload.json" 2>/dev/null \
     || { pem=""; rm -f "$sig"; die "that isn't a usable private key"; }
+  if [ "$windows" = 1 ]; then
+    printf '%s' "$pem" | /usr/bin/openssl dgst -sha256 -sign /dev/stdin -out "$dist/payload-windows.json.sig" "$dist/payload-windows.json" 2>/dev/null \
+      || { pem=""; die "payload-windows.json couldn't be signed"; }
+  fi
   pem=""
 else
   echo "openssl asks for the everyday key's passphrase:"
   /usr/bin/openssl dgst -sha256 -sign "$key" -out "$sig" "$dist/payload.json" || { rm -f "$sig"; die "not signed (wrong passphrase?)"; }
+  if [ "$windows" = 1 ]; then
+    echo "and again for payload-windows.json:"
+    /usr/bin/openssl dgst -sha256 -sign "$key" -out "$dist/payload-windows.json.sig" "$dist/payload-windows.json" || die "payload-windows.json not signed"
+  fi
 fi
 signer=""
 for k in release backup; do
@@ -342,6 +367,10 @@ for k in release backup; do
   if /usr/bin/openssl dgst -sha256 -verify "$tmp/$k.pub.pem" -signature "$sig" "$dist/payload.json" > /dev/null 2>&1; then signer="$k"; break; fi
 done
 [ -n "$signer" ] || { rm -f "$sig"; die "the signature doesn't verify with keys/*.pub.pem at the public commit: that key isn't one of them"; }
+if [ "$windows" = 1 ]; then
+  /usr/bin/openssl dgst -sha256 -verify "$tmp/$signer.pub.pem" -signature "$dist/payload-windows.json.sig" "$dist/payload-windows.json" > /dev/null 2>&1 \
+    || die "payload-windows.json's signature doesn't verify with the $signer key"
+fi
 echo "signed with the $signer key"
 
 # ------------------------------------------------------------------ 8. the tags and the push
@@ -378,13 +407,15 @@ git -C "$pub" push -q --atomic origin "$pub_commit:refs/heads/main" "refs/tags/$
 # ------------------------------------------------------------------ 9. the draft
 
 echo "== the draft"
-files=(); for f in $ASSETS payload.json.sig; do files+=("$dist/$f"); done
+all_assets="$ASSETS payload.json.sig"
+[ "$windows" = 1 ] && all_assets="$all_assets $WIN_ASSETS payload-windows.json.sig"
+files=(); for f in $all_assets; do files+=("$dist/$f"); done
 notes=(--notes "Built and signed on the developer's Mac from $pub_commit ($signer key). Write the release notes, then publish by hand (docs/RELEASING.md).")
 if [ -f "$pub/docs/release-notes/$version.md" ]; then notes=(--notes-file "$pub/docs/release-notes/$version.md"); fi
 gh release create "$tag" "${files[@]}" --repo "$REPO" --draft --verify-tag --title "RB Stems Plus $version" "${notes[@]}" \
   || die "couldn't create the draft (if it was created half-way, delete it by hand, then run this again)"
 [ "$(gh release view "$tag" --repo "$REPO" --json isDraft -q .isDraft)" = true ] || die "$tag isn't a draft"
-want="$(for f in $ASSETS payload.json.sig; do printf '%s %s\n' "$f" "$(stat -f %z "$dist/$f")"; done | LC_ALL=C sort)"
+want="$(for f in $all_assets; do printf '%s %s\n' "$f" "$(stat -f %z "$dist/$f")"; done | LC_ALL=C sort)"
 got="$(gh release view "$tag" --repo "$REPO" --json assets -q '.assets[] | "\(.name) \(.size)"' | LC_ALL=C sort)"
 [ "$got" = "$want" ] || die "the draft's files aren't the ones built here: $(tr '\n' ' ' <<< "$got")"
 gh release download "$tag" --repo "$REPO" --dir "$tmp/check" --pattern payload.json --pattern payload.json.sig \

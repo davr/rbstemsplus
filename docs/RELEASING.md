@@ -429,3 +429,24 @@ Move to 1.0 by hand, with rekordbox closed (untested):
    delete them.
    and the prototype app and its LaunchAgent, if any (`launchctl list | grep -i stems`).
 4. Install 1.0 with the one-liner. Its first install saves Pioneer's model and files itself.
+
+## Windows
+
+The Windows assets are built alongside the macOS ones and signed with the same key:
+
+```bash
+scripts/release.sh vX.Y.Z --windows
+```
+
+- **Building:** it runs `scripts/build-windows.sh` in the public clone. That needs mingw-w64
+  (`brew install mingw-w64`) and Microsoft's .NET 8 SDK (`dotnet-install.sh`), and makes
+  `rbstemsplus-windows.zip`, `onnxruntime.dll`, `bootstrap.ps1`, `payload-windows.json` and
+  `SHA256SUMS-windows`. The model asset is shared with macOS.
+- **Signing:** `payload-windows.json` is signed into `payload-windows.json.sig` with the same key
+  as `payload.json`, so openssl asks for the passphrase twice.
+- **Before a release:** the TEST build (`scripts/build-windows.sh --test URL`) must pass
+  `.github/workflows/windows.yml`, and a real install on a Windows PC with rekordbox: install both
+  features, load a track twice, check the log shows a hit, then uninstall completely.
+- **Supported versions:** the Windows compatibility list (rekordbox versions) is in
+  `scripts/build-windows.sh`. Pioneer's Windows builds are separate from the Mac ones, so test each
+  new rekordbox version on Windows before adding it.

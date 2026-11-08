@@ -22,6 +22,9 @@ FLAC_SHA256=f2c1c76592a82ffff8413ba3c4a1299b6c7ab06c734dee03fd88630485c2b920
 FLAC_URLS="https://downloads.xiph.org/releases/flac/flac-$FLAC_VERSION.tar.xz https://github.com/xiph/flac/releases/download/$FLAC_VERSION/flac-$FLAC_VERSION.tar.xz"
 HOST=x86_64-w64-mingw32
 CC="${CC_WIN:-$HOST-gcc}"
+command -v "$CC" > /dev/null || { [ -z "${CC_WIN:-}" ] && command -v gcc > /dev/null && gcc -dumpmachine | grep -q "^$HOST" && CC=gcc; } || true   # MSYS2's MINGW64 shell
+OBJDUMP="$HOST-objdump"
+command -v "$OBJDUMP" > /dev/null || OBJDUMP=objdump
 LIB=onnxruntime.dll
 
 test_path=
@@ -110,7 +113,7 @@ fi
 
 fail() { echo "bridge/win/build.sh: $*" >&2; exit 1; }
 lib="$out/$LIB"
-dump="$($HOST-objdump -p "$lib")"
+dump="$($OBJDUMP -p "$lib")"
 echo "$dump" | grep -q 'file format pei-x86-64' || fail "not an x64 DLL"
 # exports and their ordinals, exactly as exports.def says
 got="$(echo "$dump" | awk '/^\[Ordinal\/Name Pointer\] Table/{t=1;next} t&&/^\t\[/{print} t&&!/^\t\[/{t=0}' | sed 's/^\t\[ *[0-9]*\] //' | sort | tr '\n' ' ')"

@@ -9,8 +9,12 @@
 #                 ASan and UBSan, and the fuzz targets; fails when any test is skipped (a release
 #                 needs it: docs/RELEASING.md). Run outside a sandbox: it attaches disk images.
 #   make clean    remove build/, dist/ and dist-test/ (they may hold a copy of the model)
+# Windows (docs/windows.md; runs on Linux or macOS with mingw-w64 and Microsoft's .NET 8 SDK):
+#   make windows       the Windows release assets into dist/ (scripts/build-windows.sh)
+#   make bridge-win    only the Windows bridge, into build/bridge-win/
+#   make windows-test  the Windows bridge's tests (under wine on Linux) and the app's tests
 
-.PHONY: all app bridge check test bridge-test clean
+.PHONY: all app bridge check test bridge-test clean windows bridge-win windows-test
 
 all:
 	scripts/build.sh
@@ -21,7 +25,20 @@ app:
 bridge:
 	bridge/build.sh build/bridge
 
+windows:
+	scripts/build-windows.sh
+
+bridge-win:
+	bridge/win/build.sh build/bridge-win
+
+windows-test:
+	bridge/win/tests/run.sh
+	dotnet test windows/RBStemsPlus.Tests
+
 check:
+	bash -n scripts/build-windows.sh
+	sh -n bridge/win/build.sh
+	bash -n bridge/win/tests/run.sh
 	bash -n scripts/build.sh
 	bash -n scripts/build-app.sh
 	bash -n scripts/bootstrap.sh

@@ -17,6 +17,7 @@ root="$(cd "$here/../../.." && pwd)"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/rbstems-wintests.XXXXXX")"
 trap 'rm -rf "${scratch:?}"' EXIT
 CC="${CC_WIN:-x86_64-w64-mingw32-gcc}"
+command -v "$CC" > /dev/null || CC=gcc                    # MSYS2's MINGW64 shell
 passes=0 fails=0 skips=0
 
 pass() { passes=$((passes + 1)); }

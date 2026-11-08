@@ -141,3 +141,10 @@ Shared contracts the Windows side must keep:
 - **Wine 9 can't start a single-file .NET bundle** (`0x8007046C` loading System.Private.CoreLib). To test under wine, publish with `-p:PublishSingleFile=false`. The release is single-file with compression: 72 MB, against 162 MB without.
 - **Wine doesn't persist DACLs or owners** set by SetAccessControl on this filesystem: files report the wine user as owner, with Everyone allowed to read. ACL behaviour must be tested on real Windows.
 - `AppVersion` reads the **core** assembly's version, so the version is set for every project in `windows/Directory.Build.props` (`-p:RbspVersion=`).
+
+## Release pipeline notes
+- The test build's model is downloaded from the published release, `https://github.com/Gabe-LS/rbstemsplus/releases/latest/download/stemsplus-model.onnx` (308,572,524 bytes, sha256 `0cc50d87…`). The agent proxy drops long transfers, so the download resumes (`curl -C -`, 6 attempts).
+- `bootstrap.ps1` placeholders, filled by `build-windows.sh`: `$SigningKeys = ""`, `$PayloadMinimum = ""`, and the `$DownloadBase = "https://github.com/Gabe-LS/rbstemsplus/releases/latest/download/"` line (replaced for `--test`).
+- A P-256 SubjectPublicKeyInfo is 91 bytes with the uncompressed point at offset 26 (0x04, then X and Y). The bootstrap's SPKI-to-blob conversion relies on that, and it was checked with openssl.
+- The harness's real-library ordinal check applies only to a DirectML build: Microsoft's CPU build numbers its exports @1 and @2.
+- `release.sh --windows` is opt-in, so the upstream macOS flow is unchanged without it.
