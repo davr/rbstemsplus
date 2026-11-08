@@ -5,10 +5,13 @@
 #
 # A test build (scripts/build-windows.sh --test): the app and bootstrap.ps1 download from this
 # release, and trust only a key made fresh on the runner for this build (its private half never
-# leaves the runner). Run it by hand: Actions > windows-prerelease > Run workflow.
+# leaves the runner). Started by pushing a tag named windows-test-* (git tag windows-test-2 &&
+# git push origin windows-test-2), or by hand once this file is on the default branch.
 name: windows-prerelease
 
 on:
+  push:
+    tags: ["windows-test-*"]
   workflow_dispatch:
     inputs:
       tag:
@@ -23,7 +26,7 @@ jobs:
   prerelease:
     runs-on: ubuntu-24.04
     env:
-      TAG: ${{ inputs.tag }}
+      TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
@@ -56,7 +59,8 @@ jobs:
 
           Everything the app installs comes from this release, signed with a key made for this build only. See docs/windows.md.
           EOF
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
+          target=(); [ "$GITHUB_EVENT_NAME" = push ] || target=(--target "$GITHUB_SHA")
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease "${target[@]}" \
             --title "RB Stems Plus for Windows (TEST, $TAG)" --notes-file notes.md \
             rbstemsplus-windows.zip onnxruntime.dll stemsplus-model.onnx bootstrap.ps1 \
             payload-windows.json payload-windows.json.sig SHA256SUMS-windows
