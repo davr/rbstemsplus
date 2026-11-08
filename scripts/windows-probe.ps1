@@ -12,9 +12,10 @@ Run it in PowerShell (Windows PowerShell 5.1 or PowerShell 7):
 It prints its report and also saves it as rbstemsplus-probe.txt on your Desktop, with your user
 name replaced by <user>. Paste that file's contents back (or attach it).
 
-Optional: -RekordboxDir "D:\Some\Folder\rekordbox 7.2.19" if rekordbox isn't installed where the
-registry says, and -Deep to also scan every .dll in rekordbox's folder for ONNX Runtime imports and
-strings (slower).
+Optional: -RekordboxDir "C:\Program Files\Pioneer\rekordbox 7.2.19" scans only that folder (the
+one holding rekordbox.exe), ignoring other installed versions; without it, every rekordbox folder
+the registry or Program Files lists is scanned. -Deep also scans every .dll in the folder for ONNX
+Runtime imports and strings (slower).
 #>
 [CmdletBinding()]
 param(
@@ -325,17 +326,31 @@ foreach ($k in @('HKLM:\SOFTWARE\Pioneer', 'HKLM:\SOFTWARE\WOW6432Node\Pioneer',
     }
 }
 
-# also the usual folders, and the one given
+# the folder given (and only that one), else the registry's and the usual folders
 Out-Section "rekordbox folders"
-foreach ($root in @("$env:ProgramFiles\Pioneer", "${env:ProgramFiles(x86)}\Pioneer", "$env:ProgramFiles\AlphaTheta", "$env:ProgramFiles\rekordbox")) {
-    if ($root -and (Test-Path -LiteralPath $root)) {
-        Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-            if ($_.Name -match 'rekordbox') { $installs.Add($_.FullName) }
+if ($RekordboxDir) {
+    $given = $RekordboxDir.Trim().Trim('"').TrimEnd('\')
+    if (-not (Test-Path -LiteralPath $given -PathType Container)) {
+        Out-Line "-RekordboxDir `"$given`" isn't a folder: check the path and run again."
+        $installs = @()
+    } else {
+        $given = (Resolve-Path -LiteralPath $given).ProviderPath.TrimEnd('\')
+        Out-Line "only the folder given with -RekordboxDir is scanned (the registry entries above are listed, not scanned)"
+        if (-not (Get-ChildItem -LiteralPath $given -Filter 'rekordbox*.exe' -File -ErrorAction SilentlyContinue)) {
+            Out-Line "note: no rekordbox*.exe directly in it; it's scanned anyway"
+        }
+        $installs = @($given)
+    }
+} else {
+    foreach ($root in @("$env:ProgramFiles\Pioneer", "${env:ProgramFiles(x86)}\Pioneer", "$env:ProgramFiles\AlphaTheta", "$env:ProgramFiles\rekordbox")) {
+        if ($root -and (Test-Path -LiteralPath $root)) {
+            Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                if ($_.Name -match 'rekordbox') { $installs.Add($_.FullName) }
+            }
         }
     }
+    $installs = @($installs | Select-Object -Unique)
 }
-if ($RekordboxDir) { $installs.Add($RekordboxDir.TrimEnd('\')) }
-$installs = @($installs | Select-Object -Unique)
 if ($installs.Count -eq 0) { Out-Line "no rekordbox folder found: run again with -RekordboxDir `"<folder holding rekordbox.exe>`"" }
 foreach ($d in $installs) { Out-Line "folder: $d" }
 
