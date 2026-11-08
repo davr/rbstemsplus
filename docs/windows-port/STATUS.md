@@ -25,7 +25,10 @@ Legend: [x] done · [~] in progress · [ ] to do · [!] blocked or needs the use
   - a serial queue with delays, and a parallel apply;
   - SHA-256;
   - an inverse real FFT.
-- [ ] `rbstems_bridge_win.c`: a copy of `bridge/rbstems_bridge.c`, ported:
+- [~] `rbstems_bridge_win.c`: a copy of `bridge/rbstems_bridge.c`, being ported. It doesn't compile yet.
+  - **Done:** the mechanical renames (rb_* file calls, locks, sha, PATH_MAX); the header and includes; `open_w` (binary mode); `mkdirs`; `location_path_ok` (Windows paths); the C locale (`_strtod_l`); `gone_why` and `check_location` (volume serial pin, external-drive test); `log_using`; `arm_recheck` with `rb_after`; `process_start`; the whole "loading the real library" section (ACL check, LoadLibraryExW, known folders, `load_real` with `rb_queue`s).
+  - **Still to port:** the blocks in `each_name`, `load_index`, `prune`, the memo cleanup, `queue_index_load`, `queue_prune`, `first_prune`, `repin`, `hook_CreateSession` and `hook_Run`; `free_bytes`/`disk_bytes` (use `rb_space`); `rebuild_spec` (use `rb_irfft`); `futimes` (use `rb_futimes_now`); `usleep` in the writer test delay; the wchar_t model path in `hook_CreateSession`; `file_sha256_locked` (`st_mtimespec`, then `st_mtime`); the exports at the end (`dlsym`, `GetProcAddress`; add `_DML` and `_CUDA`); a `DllMain` to set `self_module`.
+- Original plan for it:
   - blocks become callbacks; dispatch becomes `rb_queue`;
   - CC_SHA256 becomes `rb_sha256`; vDSP becomes `rb_irfft`;
   - the paths go to Known Folders;
