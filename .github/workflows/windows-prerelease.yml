@@ -1,0 +1,63 @@
+# Publishes a TEST build of the Windows version as a prerelease of this repository, so it can be
+# installed and tried on a real PC before an official, signed release exists:
+#
+#   irm https://github.com/<owner>/<repo>/releases/download/<tag>/bootstrap.ps1 | iex
+#
+# A test build (scripts/build-windows.sh --test): the app and bootstrap.ps1 download from this
+# release, and trust only a key made fresh on the runner for this build (its private half never
+# leaves the runner). Run it by hand: Actions > windows-prerelease > Run workflow.
+name: windows-prerelease
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create (a new one each time)"
+        required: true
+        default: "windows-test-1"
+
+permissions:
+  contents: write
+
+jobs:
+  prerelease:
+    runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: "tools"
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mingw-w64 xz-utils > /dev/null
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "8.0.x" }
+      - name: "the tag is new"
+        run: |
+          [[ "$TAG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "tag '$TAG' isn't plain"; exit 1; }
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then echo "release $TAG exists: use a new tag"; exit 1; fi
+      - name: "the test build"
+        run: |
+          git config user.email ci@example.invalid && git config user.name ci
+          scripts/build-windows.sh --test "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/"
+          grep -qF "releases/download/${TAG}/" dist-test/bootstrap.ps1
+      - name: "the prerelease"
+        run: |
+          cd dist-test
+          cat > notes.md <<EOF
+          **TEST build** of the Windows version of RB Stems Plus, from \`${GITHUB_SHA}\` on \`${GITHUB_REF_NAME}\`. Not an official release.
+
+          Install (Windows 10/11, 64-bit; quit rekordbox first). In PowerShell:
+
+          \`\`\`powershell
+          irm https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/bootstrap.ps1 | iex
+          \`\`\`
+
+          Everything the app installs comes from this release, signed with a key made for this build only. See docs/windows.md.
+          EOF
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
+            --title "RB Stems Plus for Windows (TEST, $TAG)" --notes-file notes.md \
+            rbstemsplus-windows.zip onnxruntime.dll stemsplus-model.onnx bootstrap.ps1 \
+            payload-windows.json payload-windows.json.sig SHA256SUMS-windows
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name'

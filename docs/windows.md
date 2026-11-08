@@ -10,6 +10,19 @@ the [honest risks](../README.md#honest-risks). This page covers what is differen
 > **Status: new.** The Windows version was tested with rekordbox **7.2.14** on Windows 11. Its
 > STEMS model is the same file as on the Mac, and its ONNX Runtime is 1.18.0 (DirectML build).
 
+## Testing builds from this fork
+
+Until an official, signed release includes Windows, test builds are published as **prereleases**
+of this repository by the `windows-prerelease` workflow. Each says on its page how to install
+it, for example:
+
+```powershell
+irm https://github.com/davr/rbstemsplus/releases/download/windows-test-1/bootstrap.ps1 | iex
+```
+
+A test build's window title says "TEST BUILD". It downloads everything from its own prerelease,
+and trusts only a key made for that build.
+
 ## Before you install
 
 - **Windows 10 or 11, 64-bit.**

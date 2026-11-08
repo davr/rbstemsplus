@@ -113,18 +113,19 @@ fi
 
 fail() { echo "bridge/win/build.sh: $*" >&2; exit 1; }
 lib="$out/$LIB"
-dump="$($OBJDUMP -p "$lib")"
+# CRs stripped and any indentation accepted: MSYS2's mingw-native objdump writes CRLF
+dump="$($OBJDUMP -p "$lib" | tr -d '\r')"
 echo "$dump" | grep -q 'file format pei-x86-64' || fail "not an x64 DLL"
 # exports and their ordinals, exactly as exports.def says
-got="$(echo "$dump" | awk '/^\[Ordinal\/Name Pointer\] Table/{t=1;next} t&&/^\t\[/{print} t&&!/^\t\[/{t=0}' | sed 's/^\t\[ *[0-9]*\] //' | sort | tr '\n' ' ')"
+got="$(echo "$dump" | awk '/\[Ordinal\/Name Pointer\] Table/{t=1;next} t&&/^[[:space:]]+\[/{print} t&&!/^[[:space:]]+\[/{t=0}' | sed -E 's/^[[:space:]]+\[ *[0-9]+\] //' | sort | tr '\n' ' ')"
 want="OrtGetApiBase OrtSessionOptionsAppendExecutionProviderEx_DML OrtSessionOptionsAppendExecutionProvider_CPU OrtSessionOptionsAppendExecutionProvider_DML rbstems_marker "
 [ "$got" = "$want" ] || fail "exports: $got (expected $want)"
 base="$(echo "$dump" | awk '/Export Address Table -- Ordinal Base/{print $NF; exit}')"
 [ "$base" = 1 ] || fail "ordinal base $base, expected 1"
-eat="$(echo "$dump" | awk '/^Export Address Table -- Ordinal Base/{t=1;next} t&&/^\t\[/{print} t&&!/^\t\[/{t=0}')"
+eat="$(echo "$dump" | awk '/Export Address Table -- Ordinal Base/{t=1;next} t&&/^[[:space:]]+\[/{print} t&&!/^[[:space:]]+\[/{t=0}')"
 [ "$(echo "$eat" | wc -l | tr -d ' ')" = 5 ] || fail "export address table: $eat"
 # ordinal of each name (objdump: [ index] +base[ ordinal] ... and the name table in ordinal order)
-names="$(echo "$dump" | awk '/^\[Ordinal\/Name Pointer\] Table/{t=1;next} t&&/^\t\[/{print} t&&!/^\t\[/{t=0}')"
+names="$(echo "$dump" | awk '/\[Ordinal\/Name Pointer\] Table/{t=1;next} t&&/^[[:space:]]+\[/{print} t&&!/^[[:space:]]+\[/{t=0}')"
 for pair in "OrtGetApiBase 1" "OrtSessionOptionsAppendExecutionProviderEx_DML 2" "OrtSessionOptionsAppendExecutionProvider_CPU 3" \
             "OrtSessionOptionsAppendExecutionProvider_DML 4" "rbstems_marker 5"; do
   n="${pair% *}"; o="${pair#* }"
