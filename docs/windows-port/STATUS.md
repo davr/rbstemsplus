@@ -99,7 +99,26 @@ Legend: [x] done · [~] in progress · [ ] to do · [!] blocked or needs the use
   - This session can't push tags (the git proxy refuses), and `workflow_dispatch` only works once the workflow file is on the default branch.
   - GitHub creates the tag on the built commit.
 - The first one is `windows-test-1`, started at 4e539e3.
-- The CI `windows` job failed natively at first: MSYS2's objdump output (CRLF) broke the export check. Fixed in `bridge/win/build.sh` (CRs stripped, any indentation accepted).
+- **CI `windows` job, native Windows (MSYS2):**
+  - objdump's text output differs between binutils versions, so `build.sh` now reads the PE tables itself (`bridge/win/pe_tables.py`);
+  - real ACLs made the test bridge refuse MSYS2's temp folder, so `run.sh` now locks the test folders as the installer does;
+  - MSYS2 rewrote `icacls /grant` into a path, so `icacls` now runs with `MSYS2_ARG_CONV_EXCL`;
+  - result: **115 of 118 pass natively, the real ACL refusal test included.** The 3 left are the chosen-location tests, still being diagnosed; `run.sh` now prints the end of `bridge.log` on a failure.
+- **Progress display:** `bootstrap.ps1` shows numbered steps (1 to 7) and Write-Progress bars with MB, percent and speed. The app shows a step line ("Step 2 of 3: …") and a progress bar: a percentage for downloads and the 300 MB model copies, a moving bar otherwise.
+- **Prereleases:** `windows-test-1` (first) and `windows-test-2` (with the progress display).
+
+## First real-PC test (the user, rekordbox 7.2.14, windows-test-1, 2026-11-08): it works
+- **The install:**
+  - Demucs v4 installed: Pioneer's model saved, ours in place;
+  - Stems Cache installed through UAC: Pioneer's DLL saved, the bridge in place;
+  - `rekordbox_model=1` was written and the watcher registered.
+- **rekordbox ran with the bridge.** The release bridge loaded Pioneer's ORT 1.18.0 from `C:\ProgramData\rbstemsplus\ort` (the real ACL check passed) and opened our model's sessions with memory pattern off.
+- **The cache:**
+  - track A missed and was cached; track B missed;
+  - back on track A, all 30 cached chunks came back as hits, about 0.5 s each, and the rest were separated;
+  - there were no errors.
+- **Slow separation:** about 13 s per 11 s chunk, about 0.85x real time, apparently on the CPU. Analysis and plan are in [GPU.md](GPU.md). `windows-test-3` logs the providers and the speed.
+- **Bug found after the test:** on real Windows `ReOpenFile` refuses the bridge's handles. It is used for the hit's "last used" stamp, so the LRU and the 60-day cleanup didn't see use, and for the chosen location's write check. Fixed with `rb_reopen` (reopen by final path, then check it is the same file), plus a test that a hit refreshes the entry's time. The user needs `windows-test-3`, then Uninstall and Install Stems Cache, for the fixed bridge: the app doesn't yet offer bridge updates.
 
 ## Verification still owed
 - [x] The bridge builds under mingw, and the export, ordinal and import checks pass.
