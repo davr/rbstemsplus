@@ -54,7 +54,10 @@ extension Controller {
             _ = alert("Administrator needed", "Only an administrator can update RB Stems Plus on this Mac.", ["OK"]); return
         }
         guard confirm("Update RB Stems Plus to \(m.app.version)", "Update", "Replaces this version with RB Stems Plus \(m.app.version).") else { return }
-        busy("Updating RB Stems Plus…")                  // no action marker: nothing in rekordbox changes
+        // the update quits the app: a playlist being prepared is stopped first (its set written),
+        // before anything is downloaded, so Cancel leaves everything as it was
+        guard confirmStopPreparing("Update") else { return }
+        busyInFront("Updating RB Stems Plus…")                  // no action marker: nothing in rekordbox changes
         work.async {
             safeRemove(updateDir)
             let zip = updateDir + "/" + m.app.zip, unpacked = updateDir + "/new"

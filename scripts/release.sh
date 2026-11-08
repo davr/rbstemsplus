@@ -54,7 +54,7 @@
 #      tag are pushed together;
 #   9. gh creates the DRAFT release vX.Y.Z on Gabe-LS/rbstemsplus with the nine files (it fails
 #      if the release exists; nothing is ever replaced), with docs/release-notes/X.Y.Z.md as its
-#      notes when there is one, and the draft is checked: its files' names and sizes, and its
+#      notes when there is one (unwrapped by scripts/unwrap-notes.py: GitHub keeps line breaks), and the draft is checked: its files' names and sizes, and its
 #      payload.json and payload.json.sig are the ones made here.
 #
 # Needs: Xcode 26+ (scripts/build.sh), gh signed in with access to both repositories (it never
@@ -121,6 +121,7 @@ dev_url="$(git -C "$root" remote get-url origin 2>/dev/null || true)"
 tag_here=0; remote=""
 if [ "$dry" = 0 ]; then
   command -v gh > /dev/null || die "gh isn't installed"
+  command -v python3 > /dev/null || die "python3 isn't installed (it unwraps the release notes)"
   gh auth status > /dev/null 2>&1 || die "gh isn't signed in: run gh auth login yourself first"
   echo "== the commit"
   git -C "$root" fetch -q origin main || die "couldn't fetch origin main"
@@ -380,7 +381,13 @@ git -C "$pub" push -q --atomic origin "$pub_commit:refs/heads/main" "refs/tags/$
 echo "== the draft"
 files=(); for f in $ASSETS payload.json.sig; do files+=("$dist/$f"); done
 notes=(--notes "Built and signed on the developer's Mac from $pub_commit ($signer key). Write the release notes, then publish by hand (docs/RELEASING.md).")
-if [ -f "$pub/docs/release-notes/$version.md" ]; then notes=(--notes-file "$pub/docs/release-notes/$version.md"); fi
+# GitHub keeps every line break of a release's notes as a <br>: the file, wrapped like every
+# Markdown file here, goes up unwrapped (one line per paragraph and list item)
+if [ -f "$pub/docs/release-notes/$version.md" ]; then
+  python3 -I "$pub/scripts/unwrap-notes.py" "$pub/docs/release-notes/$version.md" > "$tmp/notes.md" \
+    && [ -s "$tmp/notes.md" ] || die "couldn't unwrap docs/release-notes/$version.md"
+  notes=(--notes-file "$tmp/notes.md")
+fi
 gh release create "$tag" "${files[@]}" --repo "$REPO" --draft --verify-tag --title "RB Stems Plus $version" "${notes[@]}" \
   || die "couldn't create the draft (if it was created half-way, delete it by hand, then run this again)"
 [ "$(gh release view "$tag" --repo "$REPO" --json isDraft -q .isDraft)" = true ] || die "$tag isn't a draft"

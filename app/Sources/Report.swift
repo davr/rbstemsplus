@@ -13,7 +13,7 @@ import AppKit
 extension Controller {
     @objc func createReport() {
         guard !actionRunning else { return }
-        busy("Creating a report…")                       // no action: no busy marker
+        busyInFront("Creating a report…")                       // no action: no busy marker
         work.async {
             let made = buildReport(self.log)
             self.busy(nil)

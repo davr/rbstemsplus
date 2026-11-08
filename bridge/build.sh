@@ -111,12 +111,21 @@ if [ -n "$test_path" ]; then
   defines="-DRBSTEMS_TEST_REAL_PATH=\"$test_path\""
   note="TEST: real library from $test_path"
 fi
+# research only: RBSTEMS_DUMP_DIR=/Users/Shared/rbstems-dump writes every chunk rekordbox sends
+# there (scripts/build.sh refuses it for a release)
+dump=
+if [ -n "${RBSTEMS_DUMP_DIR:-}" ]; then
+  case "$RBSTEMS_DUMP_DIR" in /*) ;; *) echo "RBSTEMS_DUMP_DIR must be an absolute path" >&2; exit 2 ;; esac
+  case "$RBSTEMS_DUMP_DIR" in *'"'*|*'\'*) echo "RBSTEMS_DUMP_DIR can't contain \" or \\" >&2; exit 2 ;; esac
+  dump="-DRBSTEMS_DUMP_DIR=\"$RBSTEMS_DUMP_DIR\""
+  note="$note, DUMP to $RBSTEMS_DUMP_DIR"
+fi
 for arch in $ARCHS; do
   prefix="$scratch/$FLAC_VERSION-$arch"
   extra=
   if [ -n "$test_path" ] && [ "${RBSTEMS_SANITIZE:-}" = 1 ]; then extra="$sanitize"; fi
   clang -dynamiclib -O2 -arch "$arch" -mmacosx-version-min=$MIN_MACOS -Wall -Wextra -fvisibility=hidden $extra \
-    ${defines:+"$defines"} -I"$here" -I"$prefix/include" \
+    ${defines:+"$defines"} ${dump:+"$dump"} -I"$here" -I"$prefix/include" \
     "$here/rbstems_bridge.c" "$prefix/lib/libFLAC.a" -framework CoreFoundation -framework Accelerate \
     -Wl,-exported_symbol,_OrtGetApiBase \
     -Wl,-exported_symbol,_OrtSessionOptionsAppendExecutionProvider_CPU \

@@ -55,6 +55,9 @@
  *         rekordbox opens the Demucs model, and after writes that take the cache over the limit,
  *         on the maintenance queue. The cleanup touches only names and depths this file writes
  *         (layout()); anything else in the folder is left alone.
+ * Kept:   ~/Library/Application Support/rbstemsplus/kept/<name>.kept, written by the prepare
+ *         helper: the entries of a prepared playlist, kept until a date (see "kept sets"). Until
+ *         then they never age out, and over max_gb every other entry goes before them.
  * Space:  nothing is written to the cache while its disk has less free than its floor: 10% of the
  *         disk's size, at most 50 GB (free_floor); cached stems still load.
  * Memory: our own model (our_models) is opened with ONNX Runtime's memory pattern off; any other
@@ -121,9 +124,10 @@ EXPORT const char rbstems_marker[] = "rbstems-bridge";
 #define PIONEER_0002 "435c987855f7ea74ff5f20090541748cbbce5a2e8e501d07b10f4e703453215a"
 static const char *const pioneer_models[] = {PIONEER_0002};
 /* what this bridge can cache, for the app, which reads it from the file (keep in step with
- * pioneer_models): "rbstems-cache: rebuild=<v> location=1 pioneer=<sha>[,<sha>];". location=1: it reads
- * cache_dir and cache_id (a chosen location). New tokens go before pioneer=, whose list runs to ';'. */
-__attribute__((used)) static const char rbstems_caps[] = "rbstems-cache: rebuild=" REBUILD_VERSION " location=1 pioneer=" PIONEER_0002 ";";
+ * pioneer_models): "rbstems-cache: rebuild=<v> location=1 kept=1 pioneer=<sha>[,<sha>];". location=1: it
+ * reads cache_dir and cache_id (a chosen location). kept=1: it keeps prepared playlists' entries
+ * (kept sets). New tokens go before pioneer=, whose list runs to ';'. */
+__attribute__((used)) static const char rbstems_caps[] = "rbstems-cache: rebuild=" REBUILD_VERSION " location=1 kept=1 pioneer=" PIONEER_0002 ";";
 /* dB: rebuilt stems must explain the chunk at least this well (chunks over -60 dBFS, FRAME_FLOOR).
  * Pioneer's model doesn't make its stems add up exactly: on rumble techno (Ignez, SMV015, 171
  * chunks) its worst chunk was -17.9 dB, most below -24; a wrong rebuild gives -6 dB or worse. */
@@ -147,6 +151,7 @@ static dispatch_queue_t maint;          /* validate, index loads, prune: never o
 static char base_dir[PATH_MAX - DEEPEST]; /* where the stems are ("": none), short enough for every file in it */
 static char memo_dir[PATH_MAX - DEEPEST]; /* the model-hash memos: always ~/Library/Caches/rbstemsplus */
 static char config_path[PATH_MAX];
+static char kept_dir[PATH_MAX];         /* the kept sets' folder ("": none) */
 static char log_path[PATH_MAX];
 static char state_path[PATH_MAX];       /* bridge-state, for the app's light */
 static int chosen;                      /* base_dir is a chosen location, on an external drive */
@@ -913,6 +918,7 @@ static void set_paths(void) {
         pathf(state_path, sizeof state_path, "%s/bridge-state", dir);
     }
     pathf(config_path, sizeof config_path, "%s/Library/Application Support/rbstemsplus/config.ini", home);
+    pathf(kept_dir, sizeof kept_dir, "%s/Library/Application Support/rbstemsplus/kept", home);
     size_t len, tail = strlen(CACHE_TAIL);
     if (pathf(memo_dir, sizeof memo_dir, "%s" CACHE_TAIL, home) || (len = strlen(memo_dir)) <= tail
         || strcmp(memo_dir + len - tail, CACHE_TAIL)) {
@@ -1650,9 +1656,108 @@ static int residual_ok(const int16_t *pcm, const float *mix, size_t L, long d, c
 
 /* ---------------------------------------------------------------- limits */
 
+/* Kept sets: a prepared playlist's entries, kept until a date. The prepare helper writes one file
+ * per set into kept_dir (<name>.kept, renamed into place whole), exactly:
+ *     rbstemsplus-kept 1\n
+ *     until <seconds since 1970, decimal, no leading zero>\n
+ *     <model folder> <key>\n          (each 64 lowercase hex digits; any number of lines, 0 too)
+ * A file that differs in any byte, is over KEPT_FILE_MAX, or isn't a plain file (a link) keeps
+ * nothing, with a log line; one whose date has passed keeps nothing, silently. Over KEPT_SETS_MAX
+ * files (the app makes at most 5) keeps nothing at all: never a choice of which. Names starting
+ * with '.' are someone's temporary files. The bridge never writes or deletes them. */
+#define KEPT_SETS_MAX 5
+#define KEPT_FILE_MAX (8 << 20)                 /* ~64,000 entries: about 1 TB of stems */
+#define KEPT_LINE 130                           /* "<64> <64>\n" */
+typedef struct { unsigned char model[32], key[32]; } kept_entry;
+static void unhex(const char *s, unsigned char *out);
+
+static int by_kept(const void *a, const void *b) { return memcmp(a, b, sizeof(kept_entry)); }
+
+/* a kept file's bytes: 0 with *until and *count (the entries, written to out unless it is NULL),
+ * -1 if they aren't exactly the format above */
+static int parse_kept(const char *b, size_t n, long long *until, kept_entry *out, size_t *count) {
+    static const char head[] = "rbstemsplus-kept 1\nuntil ";
+    size_t h = sizeof head - 1, i;
+    long long u = 0;
+    if (n < h || memcmp(b, head, h)) return -1;
+    for (i = h; i < n && i - h < 12 && b[i] >= '0' && b[i] <= '9'; i++) u = u * 10 + (b[i] - '0');
+    if (i == h || i >= n || b[i] != '\n' || (b[h] == '0' && i - h > 1)) return -1;
+    i++;
+    if ((n - i) % KEPT_LINE) return -1;
+    size_t k = 0;
+    for (; i < n; i += KEPT_LINE, k++) {
+        if (!is_hex(b + i, 64) || b[i + 64] != ' ' || !is_hex(b + i + 65, 64) || b[i + 129] != '\n') return -1;
+        if (out) { unhex(b + i, out[k].model); unhex(b + i + 65, out[k].key); }
+    }
+    *until = u;
+    *count = k;
+    return 0;
+}
+
+/* the entries of every kept set still in its time, sorted (duplicates are harmless), into *out;
+ * returns their number and the sets' in *sets. Nothing (0) without the folder or on any doubt. */
+static size_t load_kept(kept_entry **out, size_t *sets, time_t now) {
+    __block kept_entry *v = NULL;
+    __block size_t n = 0, files = 0, live = 0;
+    *out = NULL;
+    *sets = 0;
+    if (!kept_dir[0]) return 0;
+    int d = open(kept_dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (d < 0) {
+        if (errno != ENOENT) logf_("kept: the folder can't be read (%s): nothing is kept", strerror(errno));
+        return 0;
+    }
+    /* one walk (each_name's descriptors share the folder's position): past KEPT_SETS_MAX files it
+     * only counts */
+    int ok = !each_name(d, ^int(const char *name, const struct stat *lst) {
+        size_t l = strlen(name), c = 0;
+        long long until = 0;
+        if (name[0] == '.' || l <= 5 || strcmp(name + l - 5, ".kept") || ++files > KEPT_SETS_MAX) return 0;
+        const char *why = NULL;
+        char *b = NULL;
+        struct stat st;
+        ssize_t got = 0, r = 0;
+        int fd = S_ISREG(lst->st_mode) ? openat(d, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC) : -1;
+        if (fd < 0) why = S_ISREG(lst->st_mode) ? strerror(errno) : "not a plain file";
+        else if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) why = "not a plain file";
+        else if (st.st_size > KEPT_FILE_MAX) why = "too big";
+        else if (!(b = malloc((size_t)st.st_size + 1))) why = "out of memory";
+        else {
+            while ((size_t)got <= (size_t)st.st_size && (r = read(fd, b + got, (size_t)st.st_size + 1 - (size_t)got)) > 0) got += r;
+            if (r < 0 || got != st.st_size) why = "changed while read";
+            else if (parse_kept(b, (size_t)got, &until, NULL, &c)) why = "not a kept set";
+        }
+        if (fd >= 0) close(fd);
+        if (!why && until > now && c) {
+            kept_entry *t = c <= SIZE_MAX / sizeof *v - n ? realloc(v, (n + c) * sizeof *v) : NULL;
+            if (!t) why = "out of memory";
+            else {
+                v = t;
+                parse_kept(b, (size_t)got, &until, v + n, &c);
+                n += c;
+            }
+        }
+        if (!why && until > now) live++;
+        free(b);
+        if (why) logf_("kept: %s ignored: %s", name, why);
+        return 0;
+    });
+    close(d);
+    if (!ok || files > KEPT_SETS_MAX) {
+        logf_(ok ? "kept: %zu sets, over %d: nothing is kept" : "kept: the folder can't be read (%zu sets so far): nothing is kept", files, KEPT_SETS_MAX);
+        free(v);
+        return 0;
+    }
+    if (n) qsort(v, n, sizeof *v, by_kept);
+    *out = v;
+    *sets = live;
+    return n;
+}
+
 /* one file of an entry as prune finds it: kept small (the model is an index into prune's table of
- * model folders, the key 32 bytes), so a big cache's list stays small too */
-typedef struct { unsigned char key[32]; uint32_t model; uint8_t kind; time_t mtime; long long bytes; } pfile;
+ * model folders, the key 32 bytes), so a big cache's list stays small too. kept: in a kept set
+ * (live entries only) */
+typedef struct { unsigned char key[32]; uint32_t model; uint8_t kind, kept; time_t mtime; long long bytes; } pfile;
 enum { PF_FLAC, PF_DESC, PF_CFLAC, PF_CDESC };
 
 static int by_key(const void *a, const void *b) {
@@ -1662,9 +1767,10 @@ static int by_key(const void *a, const void *b) {
     return c ? c : x->kind - y->kind;
 }
 
-static int by_mtime(const void *a, const void *b) {
-    time_t x = ((const pfile *)a)->mtime, y = ((const pfile *)b)->mtime;
-    return x < y ? -1 : x > y;
+static int by_mtime(const void *a, const void *b) {   /* entries not kept first, least recently used first */
+    const pfile *p = a, *q = b;
+    if (p->kept != q->kept) return p->kept - q->kept;
+    return p->mtime < q->mtime ? -1 : p->mtime > q->mtime;
 }
 
 static void unhex(const char *s, unsigned char *out) {     /* 64 lowercase hex digits (is_hex) */
@@ -1695,7 +1801,8 @@ static void orphan(int dir, const char *name, const struct stat *st, time_t now)
 }
 
 /* The limits, off rekordbox's threads (maintenance queue): entries unused for max_days go, then
- * over max_bytes the least recently used, down to 90% of it. Sizes are the disk space taken
+ * over max_bytes the least recently used, down to 90% of it. An entry in a kept set (load_kept)
+ * never ages out, and over max_bytes goes only once every other entry has gone. Sizes are the disk space taken
  * (entry_size: companions too); each entry's files are grouped by key first. Only layout()'s
  * names are touched, through folders opened without following links (sub_open). A walk that
  * couldn't read everything (an error, out of memory) evicts nothing and sets no total.
@@ -1795,7 +1902,15 @@ static int prune(void) {
             close(md);
         }
     }
-    size_t live = 0;
+    size_t live = 0, kn = 0, ksets = 0;
+    long long kentries = 0, kbytes = 0, kevicted = 0;
+    kept_entry *kv = NULL;
+    unsigned char (*mbin)[32] = NULL;
+    if (complete && (kn = load_kept(&kv, &ksets, now)) && !(mbin = malloc((nm ? nm : 1) * sizeof *mbin))) {
+        logf_("kept: out of memory: nothing is kept");
+        kn = 0;
+    }
+    for (size_t i = 0; i < nm && mbin; i++) unhex(models[i], mbin[i]);
     if (complete) {
         qsort(pf, n, sizeof *pf, by_key);
         for (size_t i = 0; i < n;) {                        /* one entry: its files, grouped by key */
@@ -1811,7 +1926,15 @@ static int prune(void) {
             char key[65];
             hex(pf[i].key, 32, key);
             uint32_t model = pf[i].model;
-            if (flac >= 0 && now - flac > (time_t)(max_days * 86400)) {
+            int kept = 0;
+            if (kn && flac >= 0) {
+                kept_entry probe;
+                memcpy(probe.model, mbin[model], 32);
+                memcpy(probe.key, pf[i].key, 32);
+                kept = bsearch(&probe, kv, kn, sizeof *kv, by_kept) != NULL;
+            }
+            if (kept) { kentries++; kbytes += bytes; }
+            if (flac >= 0 && !kept && now - flac > (time_t)(max_days * 86400)) {
                 if (!remove_entry(models[model], key)) aged++;
                 else total += bytes;
             } else if (flac < 0 && now - newest > 3600) {
@@ -1823,20 +1946,30 @@ static int prune(void) {
                     pf[live].model = model;
                     pf[live].mtime = flac;
                     pf[live].bytes = bytes;
+                    pf[live].kept = (uint8_t)kept;
                     live++;
                 }
             }
             i = j;
         }
         if (total > max_bytes) {
-            qsort(pf, live, sizeof *pf, by_mtime);          /* least recently used first */
+            qsort(pf, live, sizeof *pf, by_mtime);          /* not kept, least recently used, first */
             for (size_t i = 0; i < live && total > max_bytes * 9 / 10; i++) {
                 char key[65];
                 hex(pf[i].key, 32, key);
-                if (!remove_entry(models[pf[i].model], key)) { total -= pf[i].bytes; evicted++; }
+                if (!remove_entry(models[pf[i].model], key)) {
+                    total -= pf[i].bytes;
+                    evicted++;
+                    if (pf[i].kept) { kevicted++; kentries--; kbytes -= pf[i].bytes; }
+                }
             }
         }
     }
+    if (kn || ksets)
+        logf_("kept: %zu sets, %lld of their entries in the cache (%.2f GB)", ksets, kentries, kbytes / (double)(1LL << 30));
+    if (kevicted) logf_("kept: %lld kept entries removed: the cache was over %.1f GB with every other entry gone", kevicted, max_bytes / (double)(1LL << 30));
+    free(kv);
+    free(mbin);
     pthread_mutex_lock(&lock);
     if (complete && loc_state == LOC_AVAILABLE) total_bytes = total + prune_pending;
     prune_running = 0;
@@ -2620,6 +2753,27 @@ static OrtStatus *ORT_API_CALL hook_Run(OrtSession *s, const OrtRunOptions *ro, 
     CC_SHA256_Update(&c, mix.data, (CC_LONG)(mix.count * sizeof(float)));
     CC_SHA256_Final(dg, &c);
     hex(dg, 32, key);
+#ifdef RBSTEMS_DUMP_DIR
+    /* research builds only (bridge/build.sh with RBSTEMS_DUMP_DIR set; never a release): the
+     * chunk rekordbox sends, as raw float32, <ms since 1970>-<key>.mix (2 x L, planar) and .mag */
+    {
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        long long ms = (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+        const tensor *t[2] = {&mix, &mag};
+        const char *ext[2] = {"mix", "mag"};
+        mkdir(RBSTEMS_DUMP_DIR, 0777);
+        for (int k = 0; k < 2; k++) {
+            char p[PATH_MAX];
+            snprintf(p, sizeof p, "%s/%013lld-%s.%s", RBSTEMS_DUMP_DIR, ms, key, ext[k]);
+            FILE *f = fopen(p, "wb");
+            if (!f) { logf_("dump: can't write %s (%s)", p, strerror(errno)); continue; }
+            size_t n = fwrite(t[k]->data, sizeof(float), t[k]->count, f);
+            if (fclose(f) || n != t[k]->count) logf_("dump: %s is incomplete", p);
+        }
+        logf_("dump: %.12s (%zu samples)", key, L);
+    }
+#endif
     int64_t xdims[5] = {1, 4, mag.dims[1], mag.dims[2], mag.dims[3]}, xtdims[3] = {1, 8, (int64_t)L};
     int16_t *pcm = malloc(L * 8 * sizeof(int16_t));
     float *desc = malloc(sizeof(float) * 2 * DESC_MAX_FRAMES);

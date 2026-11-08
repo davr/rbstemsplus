@@ -33,8 +33,8 @@ if [ "${1:-}" = "--test" ]; then
   test_base="$2"; dist="$root/dist-test"
 elif [ $# -ne 0 ]; then
   echo "usage: $0 [--test URL]" >&2; exit 2
-elif [ -n "${RBSTEMSPLUS_TEST_BASE_URL:-}${RBSTEMSPLUS_TEST_KEY:-}${RBSTEMSPLUS_SCREENSHOTS:-}" ]; then
-  echo "build.sh: RBSTEMSPLUS_TEST_BASE_URL, RBSTEMSPLUS_TEST_KEY or RBSTEMSPLUS_SCREENSHOTS is set: unset it for a release, or use --test URL" >&2; exit 1
+elif [ -n "${RBSTEMSPLUS_TEST_BASE_URL:-}${RBSTEMSPLUS_TEST_KEY:-}${RBSTEMSPLUS_SCREENSHOTS:-}${RBSTEMS_DUMP_DIR:-}" ]; then
+  echo "build.sh: RBSTEMSPLUS_TEST_BASE_URL, RBSTEMSPLUS_TEST_KEY, RBSTEMSPLUS_SCREENSHOTS or RBSTEMS_DUMP_DIR is set: unset it for a release, or use --test URL" >&2; exit 1
 fi
 version="$(tr -d '[:space:]' < "$root/VERSION")"
 

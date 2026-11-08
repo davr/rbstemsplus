@@ -12,11 +12,48 @@ import AppKit
 func extraAppMenuItems(_ c: Controller) -> [NSMenuItem] {
     let settings = NSMenuItem(title: "Settings…", action: #selector(Controller.showSettings), keyEquivalent: ",")
     settings.target = c
-    let update = NSMenuItem(title: "Update RB Stems Plus", action: #selector(Controller.updateApp), keyEquivalent: "")
+    // an ellipsis: it asks before it updates
+    let update = NSMenuItem(title: "Update RB Stems Plus…", action: #selector(Controller.updateApp), keyEquivalent: "")
     update.target = c
     update.isHidden = true                      // until a newer RB Stems Plus is out
     c.updateItem = update
-    return [update, settings]
+    let uninstall = NSMenuItem(title: "Uninstall RB Stems Plus…", action: #selector(Controller.uninstallEverything), keyEquivalent: "")
+    uninstall.target = c
+    return [update, settings, uninstall]
+}
+
+func item(_ title: String, _ action: Selector, _ key: String = "", _ c: Controller) -> NSMenuItem {
+    let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
+    i.target = c
+    return i
+}
+
+/// View, Prepare and Manage: every button of the window, in the menu bar too.
+func windowMenus(_ c: Controller) -> [NSMenu] {
+    let view = NSMenu(title: "View")
+    view.addItem(item("Status", #selector(Controller.showStatusTab), "1", c))
+    view.addItem(item("Prepare", #selector(Controller.showPrepareTab), "2", c))
+    view.addItem(item("Manage", #selector(Controller.showManageTab), "3", c))
+    let prepare = NSMenu(title: "Prepare")
+    prepare.addItem(item("Prepare Playlist…", #selector(Controller.preparePlaylistMenu), "", c))
+    prepare.addItem(item("Check Again", #selector(Controller.checkAgainMenu), "r", c))
+    prepare.addItem(.separator())
+    prepare.addItem(item("Pause", #selector(Controller.pauseMenu), "", c))
+    prepare.addItem(item("Stop", #selector(Controller.stopMenu), ".", c))
+    let manage = NSMenu(title: "Manage")
+    for (name, actions) in [("Demucs v4", [("Install", #selector(Controller.installPlusAction)), ("Reinstall", #selector(Controller.reinstallPlusAction)),
+                                            ("Uninstall…", #selector(Controller.uninstallStemsPlus))]),
+                            ("Stems Cache", [("Install", #selector(Controller.installCacheAction)), ("Reinstall", #selector(Controller.reinstallCacheAction)),
+                                              ("Uninstall…", #selector(Controller.uninstallCache))])] {
+        let sub = NSMenu(title: name)
+        for (t, a) in actions { sub.addItem(item(t, a, "", c)) }
+        let parent = NSMenuItem(title: name, action: nil, keyEquivalent: "")
+        parent.submenu = sub
+        manage.addItem(parent)
+    }
+    manage.addItem(.separator())
+    manage.addItem(item("Show Log", #selector(Controller.showLogMenu), "", c))
+    return [view, prepare, manage]
 }
 
 /// The Help menu's items: the project's home page, its troubleshooting page and issues page, and
@@ -30,9 +67,27 @@ func helpMenuItems(_ c: Controller) -> [NSMenuItem] {
     return [home, troubleshooting, issue, report]
 }
 
-/// The controller's menu items are off while an action runs.
+/// The controller's menu items: as their window buttons are (off while an action runs).
 extension Controller: NSMenuItemValidation {
-    func validateMenuItem(_ item: NSMenuItem) -> Bool { !actionRunning }
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        let preparing = prepareTab?.isRunning == true
+        switch item.action {
+        case #selector(showStatusTab), #selector(showPrepareTab), #selector(showManageTab), #selector(showLogMenu): return true
+        case #selector(checkAgainMenu): return !actionRunning && !preparing && prepareTab?.selected != nil
+        case #selector(pauseMenu):
+            item.title = prepareTab?.run?.paused == true ? "Resume" : "Pause"
+            return preparing
+        case #selector(stopMenu): return preparing
+        case #selector(installPlusAction): return !actionRunning && installPlusBtn.isEnabled
+        case #selector(installCacheAction): return !actionRunning && installCacheBtn.isEnabled
+        case #selector(reinstallPlusAction): return !actionRunning && reinstallPlusBtn.isEnabled
+        case #selector(reinstallCacheAction): return !actionRunning && reinstallCacheBtn.isEnabled
+        case #selector(uninstallStemsPlus): return !actionRunning && uninstallPlusBtn.isEnabled
+        case #selector(uninstallCache): return !actionRunning && uninstallCacheBtn.isEnabled
+        case #selector(uninstallEverything): return !actionRunning && uninstallAllBtn.isEnabled
+        default: return !actionRunning
+        }
+    }
 }
 
 /// The standard menus: without them Cmd+Q, Cmd+W and Cmd+C/V/X/A (e.g. pasting into the
@@ -56,6 +111,9 @@ func makeMenu(_ controller: Controller) -> NSMenu {
     edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
     edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
     editItem.submenu = edit
+    for m in windowMenus(controller) {
+        let i = NSMenuItem(); i.submenu = m; main.addItem(i)
+    }
     let windowItem = NSMenuItem(); main.addItem(windowItem)
     let win = NSMenu(title: "Window")
     win.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
@@ -77,6 +135,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// seconds at most. Any other time it goes ahead: the busy marker lets the next launch finish
     /// the action. The app's own quits never wait.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // a playlist being prepared: stopped first (its set written), if the user agrees
+        if controller?.confirmStopPreparing("Quit") == false { return .terminateCancel }
         if quitNow() { return .terminateNow }
         controller?.log("quit: waiting for the step that is changing rekordbox to finish")
         critical.whenIdle(timeout: 60) { DispatchQueue.main.async { NSApp.reply(toApplicationShouldTerminate: true) } }
@@ -103,7 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// or was updated) shows at once, then the watcher's request, if any.
     func applicationDidBecomeActive(_ notification: Notification) {
         LocationMonitor.shared.update()                 // where the stems are saved, in the background
-        DispatchQueue.main.async { self.controller?.refresh(); self.controller?.checkRequest(); self.controller?.checkWatcherOn() }
+        DispatchQueue.main.async { self.controller?.prepareChanged(quiet: true); self.controller?.refresh(); self.controller?.checkRequest(); self.controller?.checkWatcherOn() }
     }
     /// "open -a" on an already open app arrives here, not as an activation
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

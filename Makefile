@@ -3,6 +3,7 @@
 #                 signs and uploads a release itself)
 #   make app      only dist/rbstemsplus-app.zip
 #   make bridge   only the bridge, into build/bridge/
+#   make helper   the prepare helper (helper/build.sh), into build/helper/: not released yet
 #   make check    quick checks: shell syntax, the two Info.plist files
 #   make test     the app's safety checks (app/Tests), built from the app's sources and run
 #   make bridge-test  the bridge's tests (bridge/tests/run.sh, disk images included), again with
@@ -10,7 +11,7 @@
 #                 needs it: docs/RELEASING.md). Run outside a sandbox: it attaches disk images.
 #   make clean    remove build/, dist/ and dist-test/ (they may hold a copy of the model)
 
-.PHONY: all app bridge check test bridge-test clean
+.PHONY: all app bridge helper check test bridge-test clean
 
 all:
 	scripts/build.sh
@@ -20,6 +21,9 @@ app:
 
 bridge:
 	bridge/build.sh build/bridge
+
+helper:
+	helper/build.sh build/helper
 
 check:
 	bash -n scripts/build.sh
@@ -31,8 +35,15 @@ check:
 	sh -n bridge/build.sh
 	bash -n bridge/tests/run.sh
 	bash -n bridge/tests/location.sh
+	sh -n helper/build.sh
+	helper/tests/same-as-bridge.sh
 	plutil -lint app/Info.plist
 	plutil -lint app/Watcher-Info.plist
+	@# the release notes, unwrapped for GitHub (release.sh), keep every word
+	@for f in docs/release-notes/*.md; do \
+	  [ "$$(tr -s ' \n' '  ' < "$$f")" = "$$(python3 -I scripts/unwrap-notes.py "$$f" | tr -s ' \n' '  ')" ] \
+	    || { echo "unwrap-notes.py changes the words of $$f"; exit 1; }; \
+	done; echo "release notes: unwrap keeps every word"
 
 test:
 	mkdir -p build/test

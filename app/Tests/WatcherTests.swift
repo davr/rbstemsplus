@@ -195,6 +195,41 @@ func watcherTests() {
     check(writeAtomically(Data(), to: againFile + ".link") && fileType(againFile + ".link") == S_IFREG && fileType(base + "/outside-victim") == nil,
           "lock: the again-mark replaces a planted link, never writes through it")
 
+    // MARK: waiting until nothing changes rekordbox
+    /// watcherSettle over `states`, what each look finds ("u": updating, "b": busy, "o": rekordbox
+    /// open, "h": an uninstall half-done), the last one lasting: its answer, the seconds paused, the log.
+    func settle(_ states: [String]) -> (ok: Bool, paused: Int, sessions: Int, log: [String]) {
+        var now = 0, paused = 0, sessions = 0, log: [String] = []
+        let s = { states[min(now, states.count - 1)] }
+        let ok = watcherSettle(updating: { s().contains("u") }, appBusy: { s().contains("b") }, rekordboxOpen: { s().contains("o") },
+                               pause: { paused += $0; now += 1 }, halfUninstalled: { s().contains("h") ? "uninstall-all" : nil },
+                               inSession: { sessions += 1 }, log: { log.append($0) })
+        return (ok, paused, sessions, log)
+    }
+    var w = settle([""])
+    check(w.ok && w.paused == 0 && w.sessions == 0 && w.log.isEmpty, "nothing going on: on at once")
+    w = settle(["o", "o", "u", "u", "u", ""])
+    check(w.ok && w.log.last?.hasPrefix("waited 10 s") == true, "rekordbox's updater, running as rekordbox quits: waited for after it quits: \(w)")
+    w = settle(["u", "u", "o", "o", ""])
+    check(w.ok && w.sessions >= 1 && w.log.contains("rekordbox is open: waiting until it quits"), "rekordbox reopened after the update: waited for too: \(w)")
+    w = settle(["o", "o", "u", "o", "o", "u", "u", ""])
+    check(w.ok && w.paused == 10 + 10 + 3 + 10 + 10 + 3 + 5, "update and rekordbox in turns: on only once neither is there: \(w)")
+    w = settle(["o", "o", "o", ""])
+    check(w.sessions == 4, "rekordbox open: its session looked at as it is found, then at each look: \(w)")
+    w = settle(["uo", "uo", "uo", "u", ""])
+    check(w.ok && w.sessions == 3, "a rekordbox session during an update's wait: looked at, or its pid is gone by the end: \(w)")
+    check(w.log.first == "an update is running: waiting until it ends" && w.log.filter { $0.hasPrefix("an update") }.count == 1, "the log says so as the wait starts, once: \(w)")
+    w = settle(["o", "h"])
+    check(!w.ok && w.log.last?.hasPrefix("an uninstall didn't finish") == true, "an uninstall left half-done when rekordbox quits: not asking: \(w)")
+    w = settle(["o", "b"])
+    check(!w.ok && w.log.last == "RB Stems Plus is still busy: not asking", "the app busy when rekordbox quits: 10 minutes, then not asking: \(w)")
+    w = settle(Array(repeating: "u", count: 500) + [""])
+    check(w.ok && w.paused == 2500, "an installer's window open for long: waited for as long as it is there: \(w.paused)")
+    w = settle(["b"])
+    check(!w.ok && w.paused == 600 && w.log.last == "RB Stems Plus is still busy: not asking", "the app busy: 10 minutes, then not asking: \(w)")
+    w = settle(["h", ""])
+    check(!w.ok && w.log.last?.hasPrefix("an uninstall didn't finish") == true && w.sessions == 0, "an uninstall left half-done: not asking, rekordbox's session unchecked: \(w)")
+
     // MARK: the checks of one start: again while starts came in, never a change lost
 
     /// watcherRounds with `checks` (each: what the check returns, and whether a start comes in

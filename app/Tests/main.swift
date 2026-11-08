@@ -96,6 +96,7 @@ rootScriptTests()
 
 signedReleaseTests()
 reportTests()
+prepareTests()
 publicReleaseTests()
 
 // MARK: stdin and copying
@@ -263,6 +264,11 @@ _ = runTool("/bin/sh", ["-c", afterExitWait + ownPrefsDeleteScript + "echo after
 check(prefsGone(testDomain) && !exists(tmp + "/after"), "uninstall: the app's preferences deleted after it quits, their file too; with no app to delete, nothing more runs")
 _ = runTool("/bin/sh", ["-c", afterExitWait + ownPrefsDeleteScript, "rbsp", String(done.processIdentifier), "0.1", "", otherDomain])
 check(prefsSet(otherDomain), "uninstall: another app's preferences are never deleted")
+do {   // the privacy permissions: reset for our bundle IDs only, while the app is still there
+    let s = ownPrefsDeleteScript, t = s.range(of: "/usr/bin/tccutil reset All \"$2\""), c = s.range(of: "io.github.rbstemsplus.*)"), e = s.range(of: "esac")
+    check(t != nil && c != nil && e != nil && c!.upperBound <= t!.lowerBound && t!.upperBound <= e!.lowerBound,
+          "uninstall: the app's privacy permissions are reset (tccutil) only for our bundle IDs, before the app is deleted")
+}
 prefsClean(otherDomain)
 mk(b + "/Prefs.app/Contents"); try? FileManager.default.copyItem(atPath: good + "/Contents/Info.plist", toPath: b + "/Prefs.app/Contents/Info.plist")
 _ = runTool("/usr/bin/defaults", ["write", testDomain, "k", "v"])
