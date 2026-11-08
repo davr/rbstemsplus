@@ -21,6 +21,15 @@ So the questions are, in order:
 1. **Does rekordbox ask for the GPU at all** for the Demucs session? A setting, the GPU, or a driver may keep it on the CPU.
 2. **If it does, does our model run on it?** Our Demucs v4 export may hold operators DirectML lacks. ONNX Runtime then splits the graph and runs those parts on the CPU, copying data between the two. That can be slower than the CPU alone.
 
+## Result of step 1 (windows-test-3 bridge, user's PC, 2026-11-08)
+- `Demucs session opened: model 0cc50d877629, memory pattern off, on the CPU (rekordbox added no GPU provider)` appeared for both sessions.
+- **No "asked for the … execution provider" line at all.** Demucs3.dll called neither `…_DML` nor `…_CPU` for these sessions, so ONNX Runtime ran them with its default, the CPU.
+- Every miss: `the model took 12.5 s: 0.88x real time`.
+- So this is **case A** below, unless rekordbox has a GPU setting that is off. Open questions:
+  - is there a GPU option in rekordbox's Preferences (Extensions › STEMS, or Advanced)?
+  - is rekordbox's own model also on the CPU? Uninstall Demucs v4, load a new track, and read the "Demucs session opened" line.
+- **Next step: case A.** The bridge adds DirectML to our model's session itself, behind `gpu=auto|off` in config.ini, and falls back to the CPU if DirectML fails. The speed lines show whether it helps. If our export falls back to the CPU on many operators, that becomes case B.
+
 ## Step 1: diagnose (in test build `windows-test-3`)
 The bridge now logs:
 - each execution provider rekordbox asks for (CPU, or DirectML with its device number), and whether that worked;
