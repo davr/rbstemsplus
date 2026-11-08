@@ -104,6 +104,7 @@ static int rekordbox_model = 0;         /* this account caches rekordbox's own (
  * .desc files are still written, so a future pre-cache (inexact decodes) can turn it on with every
  * entry saved meanwhile. A test build takes RBSTEMS_TEST_NEAR_HITS as the default. */
 static int near_on = 0;                /* config.ini near_hits */
+static int gpu_on = 1;                  /* config.ini gpu: Demucs sessions run on the GPU (DirectML), on by default */
 static long long max_bytes = 20LL << 30;
 static double max_days = 60;
 static long long total_bytes = -1;      /* -1: not counted yet */
@@ -206,7 +207,7 @@ static int yes_no(const char *v) {
 #define CONFIG_LINE_MAX 1024
 
 typedef struct {
-    int enabled, rekordbox_model, near_hits;
+    int enabled, rekordbox_model, near_hits, gpu;
     long long max_bytes;
     double max_days;
     int location;                       /* 0: this Mac; 1: a chosen location; -1: one is set, wrongly */
@@ -326,8 +327,8 @@ static int parse_config(const char *b, size_t n, config *c) {
         } else if (!strcmp(key, "cache_id")) {
             if (!uuid_ok(val) || (have_id && strcasecmp(c->id, val))) bad = 1;
             else { memcpy(c->id, val, 37); have_id = 1; }
-        } else if (!strcmp(key, "enabled") || !strcmp(key, "rekordbox_model") || !strcmp(key, "near_hits")) {
-            int yn = yes_no(val), *dst = key[0] == 'e' ? &c->enabled : key[0] == 'n' ? &c->near_hits : &c->rekordbox_model;
+        } else if (!strcmp(key, "enabled") || !strcmp(key, "rekordbox_model") || !strcmp(key, "near_hits") || !strcmp(key, "gpu")) {
+            int yn = yes_no(val), *dst = key[0] == 'e' ? &c->enabled : key[0] == 'n' ? &c->near_hits : key[0] == 'g' ? &c->gpu : &c->rekordbox_model;
             if (yn >= 0) *dst = yn;
             else logf_("config: ignored %s=%.40s (allowed 1 or 0)", key, val);
         } else if (!strcmp(key, "max_gb") || !strcmp(key, "max_days")) {
@@ -924,7 +925,7 @@ static void set_paths(void) {
  * wrongly: never this PC instead). Then the folders: the default one, which keeps the model-hash
  * memos in either case; a chosen location is never created by the bridge. */
 static void set_location(void) {
-    config c = {.enabled = 1, .rekordbox_model = 0, .near_hits = 0, .max_bytes = 20LL << 30, .max_days = 60};
+    config c = {.enabled = 1, .rekordbox_model = 0, .near_hits = 0, .gpu = 1, .max_bytes = 20LL << 30, .max_days = 60};
 #ifdef RBSTEMS_TEST_REAL_PATH
     if (getenv("RBSTEMS_TEST_NEAR_HITS")) c.near_hits = atoi(getenv("RBSTEMS_TEST_NEAR_HITS")) != 0;
 #endif
@@ -932,6 +933,7 @@ static void set_location(void) {
     enabled = c.enabled;
     rekordbox_model = c.rekordbox_model;
     near_on = c.near_hits;
+    gpu_on = c.gpu;
     max_bytes = c.max_bytes;
     max_days = c.max_days;
     if (!memo_dir[0]) return;                               /* no home for the cache: nothing cached */
@@ -2375,26 +2377,124 @@ static int is_ours(const char *fp) {
     return 0;
 }
 
-/* our model: a copy of rekordbox's options with the memory pattern off; if anything about that
- * fails, and for any other model, rekordbox's options unchanged. *how says which. */
-static OrtStatus *create_demucs(const OrtEnv *env, const ORTCHAR_T *path, const OrtSessionOptions *options,
-                                OrtSession **out, const char *fp, const char **how) {
-    *how = "rekordbox's session options";
-    if (!options || !is_ours(fp)) return R->CreateSession(env, path, options, out);
-    OrtSessionOptions *o = NULL;
-    OrtStatus *st = R->CloneSessionOptions(options, &o);
-#ifdef RBSTEMS_TEST_REAL_PATH
-    if (!st && getenv("RBSTEMS_TEST_CLONE_FAIL")) st = R->CreateStatus(ORT_FAIL, "test failure");
-#endif
-    if (!st) st = R->DisableMemPattern(o);
-    if (!st) st = R->CreateSession(env, path, o, out);      /* the session keeps its own copy of o */
-    if (o) R->ReleaseSessionOptions(o);
-    if (!st) {
-        *how = "memory pattern off";
-        return NULL;
+/* ---------------------------------------------------------------- the GPU (DirectML) */
+
+/* rekordbox for Windows runs its Demucs sessions on the CPU: it adds no execution provider (its
+ * log, 2026-11-08). Pioneer's ONNX Runtime is a DirectML build, so with gpu=1 (the default) the
+ * bridge adds DirectML to every Demucs session's copy of rekordbox's options, on the adapter with
+ * the most dedicated video memory (a laptop's discrete GPU rather than its integrated one). DirectML
+ * needs the memory pattern off and sequential execution. Anything that fails falls back to the CPU. */
+static int dml_adapter = -1;            /* chosen once: the DXGI adapter index, -1 not chosen yet, -2 none */
+static char dml_adapter_name[160];
+
+typedef struct { void *vtbl; } rb_com;   /* IDXGIFactory1 / IDXGIAdapter1, called through their vtables */
+typedef struct {
+    WCHAR Description[128]; UINT VendorId, DeviceId, SubSysId, Revision;
+    SIZE_T DedicatedVideoMemory, DedicatedSystemMemory, SharedSystemMemory; LUID AdapterLuid; UINT Flags;
+} rb_adapter_desc1;
+
+static void pick_adapter(void) {
+    if (dml_adapter != -1) return;
+    dml_adapter = -2;
+    HMODULE dx = LoadLibraryExW(L"dxgi.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    typedef HRESULT (WINAPI *create_t)(const GUID *, void **);
+    create_t create = dx ? (create_t)(void *)GetProcAddress(dx, "CreateDXGIFactory1") : NULL;
+    static const GUID iid_factory1 = {0x770aae78, 0xf26f, 0x4dba, {0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87}};
+    rb_com *f = NULL;
+    if (!create || create(&iid_factory1, (void **)&f) < 0 || !f) { logf_("GPU: no DXGI (DirectX) here"); return; }
+    /* IDXGIFactory1: ... EnumAdapters1 is method 12; IDXGIAdapter1: GetDesc1 is method 10; Release is 2 */
+    typedef HRESULT (WINAPI *enum1_t)(rb_com *, UINT, rb_com **);
+    typedef HRESULT (WINAPI *desc1_t)(rb_com *, rb_adapter_desc1 *);
+    typedef ULONG (WINAPI *release_t)(rb_com *);
+    void **fv = *(void ***)f;
+    SIZE_T best = 0;
+    for (UINT i = 0; i < 16; i++) {
+        rb_com *ad = NULL;
+        if (((enum1_t)fv[12])(f, i, &ad) < 0 || !ad) break;
+        void **av = *(void ***)ad;
+        rb_adapter_desc1 d;
+        if (((desc1_t)av[10])(ad, &d) >= 0) {
+            char name[160];
+            if (rb_utf8(d.Description, -1, name, sizeof name)) snprintf(name, sizeof name, "adapter %u", i);
+            int software = (d.Flags & 2) != 0;      /* DXGI_ADAPTER_FLAG_SOFTWARE (Microsoft Basic Render Driver) */
+            logf_("GPU: adapter %u: %s, %.1f GB of video memory%s", i, name, d.DedicatedVideoMemory / 1073741824.0, software ? " (software)" : "");
+            if (!software && (dml_adapter < 0 || d.DedicatedVideoMemory > best)) {
+                dml_adapter = (int)i;
+                best = d.DedicatedVideoMemory;
+                rb_strlcpy(dml_adapter_name, name, sizeof dml_adapter_name);
+            }
+        }
+        ((release_t)av[2])(ad);
     }
-    logf_("model %.12s: memory pattern off failed (%s), opening it with rekordbox's session options", fp, R->GetErrorMessage(st));
-    R->ReleaseStatus(st);
+    ((release_t)fv[2])(f);
+}
+
+/* adds DirectML to o; 0 when done, with *what describing it */
+static int add_dml(OrtSessionOptions *o, const char **what) {
+    static char desc[220];
+    static OrtStatus *(ORT_API_CALL *dml)(OrtSessionOptions *, int);
+    if (!dml) dml = (OrtStatus *(ORT_API_CALL *)(OrtSessionOptions *, int))(void *)GetProcAddress(real_handle, "OrtSessionOptionsAppendExecutionProvider_DML");
+    if (!dml) { *what = "this ONNX Runtime has no DirectML"; return -1; }
+    pick_adapter();
+    if (dml_adapter < 0) { *what = "no GPU found"; return -1; }
+    OrtStatus *st = R->SetSessionExecutionMode(o, ORT_SEQUENTIAL);
+    if (!st) st = dml(o, dml_adapter);
+    if (st) {
+        snprintf(desc, sizeof desc, "DirectML refused: %s", R->GetErrorMessage(st));
+        R->ReleaseStatus(st);
+        *what = desc;
+        return -1;
+    }
+    snprintf(desc, sizeof desc, "on the GPU (DirectML, %s)", dml_adapter_name);
+    *what = desc;
+    return 0;
+}
+
+/* A Demucs session: a copy of rekordbox's options with DirectML added (gpu=1) and, for our model,
+ * the memory pattern off (measured: 2.26 GB peak with it, 1.75 GB without, same speed). If the
+ * GPU session can't be made, the same without DirectML; if anything about the copy fails,
+ * rekordbox's options unchanged. *how says which; *gpu whether it runs on the GPU. */
+static OrtStatus *create_demucs(const OrtEnv *env, const ORTCHAR_T *path, const OrtSessionOptions *options,
+                                OrtSession **out, const char *fp, const char **how, int *gpu) {
+    static char howbuf[300];
+    *how = "rekordbox's session options";
+    *gpu = 0;
+    int ours = is_ours(fp);
+    if (!options || (!ours && !gpu_on)) return R->CreateSession(env, path, options, out);
+    for (int attempt = gpu_on ? 0 : 1; attempt < 2; attempt++) {
+        OrtSessionOptions *o = NULL;
+        const char *dml_what = "";
+        int with_dml = 0;
+        OrtStatus *st = R->CloneSessionOptions(options, &o);
+#ifdef RBSTEMS_TEST_REAL_PATH
+        if (!st && getenv("RBSTEMS_TEST_CLONE_FAIL")) st = R->CreateStatus(ORT_FAIL, "test failure");
+#endif
+        /* DirectML needs the memory pattern off, whichever model it is */
+        if (!st && (ours || attempt == 0)) st = R->DisableMemPattern(o);
+        if (!st && attempt == 0) {
+            with_dml = add_dml(o, &dml_what) == 0;
+            if (!with_dml) {
+                logf_("GPU: %s: model %.12s runs on the CPU", dml_what, fp);
+                R->ReleaseSessionOptions(o);
+                if (!ours) return R->CreateSession(env, path, options, out);
+                continue;                                   /* ours: memory pattern off, on the CPU */
+            }
+        }
+        if (!st) st = R->CreateSession(env, path, o, out);  /* the session keeps its own copy of o */
+        if (o) R->ReleaseSessionOptions(o);
+        if (!st) {
+            snprintf(howbuf, sizeof howbuf, "%s%s%s", ours ? "memory pattern off" : "rekordbox's session options",
+                     with_dml ? ", " : "", with_dml ? dml_what : "");
+            *how = howbuf;
+            *gpu = with_dml;
+            return NULL;
+        }
+        logf_("model %.12s: %s failed (%s)%s", fp, with_dml ? "the GPU session" : "memory pattern off", R->GetErrorMessage(st),
+              with_dml ? ": trying the CPU" : ", opening it with rekordbox's session options");
+        R->ReleaseStatus(st);
+        if (!with_dml && attempt == 1) break;
+        if (with_dml && !ours) return R->CreateSession(env, path, options, out);
+    }
     return R->CreateSession(env, path, options, out);
 }
 
@@ -2467,14 +2567,16 @@ static OrtStatus *ORT_API_CALL hook_CreateSession(const OrtEnv *env, const ORTCH
         logf_("ERROR cannot read %s", path[0] ? path : "the model (its path isn't valid UTF-16 or is too long)");
         return R->CreateSession(env, model_path, options, out);
     }
-    OrtStatus *st = create_demucs(env, model_path, options, out, fp, &how);
+    int on_gpu = 0;
+    OrtStatus *st = create_demucs(env, model_path, options, out, fp, &how, &on_gpu);
     int cached = !st && enabled && base_dir[0];            /* a chosen location may come back later */
     /* rekordbox's own model: rebuilt and cached only where this account turned it on */
     int pioneer = is_pioneer(fp), rebuild = pioneer && rekordbox_model;
     char id[65];
     if (rebuild) rebuilt_id(fp, id);
     else memcpy(id, fp, 65);
-    if (!st) logf_("Demucs session opened: model %.12s, %s, %s%s%s", fp, how, had_dml(options) ? "on the GPU (DirectML)" : "on the CPU (rekordbox added no GPU provider)",
+    if (!st) logf_("Demucs session opened: model %.12s, %s%s%s%s", fp, how,
+                   on_gpu ? "" : had_dml(options) ? ", on the GPU (rekordbox's DirectML)" : gpu_on ? ", on the CPU" : ", on the CPU (gpu=0 in config.ini)",
                    cached ? "" : ", not cached",
                    !cached || !pioneer ? "" : rebuild ? ", rekordbox's own: stems rebuilt" : ", rekordbox's own: not cached here (rekordbox_model=0)");
     if (!cached) return st;

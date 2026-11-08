@@ -30,6 +30,22 @@ So the questions are, in order:
   - is rekordbox's own model also on the CPU? Uninstall Demucs v4, load a new track, and read the "Demucs session opened" line.
 - **Next step: case A.** The bridge adds DirectML to our model's session itself, behind `gpu=auto|off` in config.ini, and falls back to the CPU if DirectML fails. The speed lines show whether it helps. If our export falls back to the CPU on many operators, that becomes case B.
 
+## rekordbox's own model is on the CPU too (user, 2026-11-08)
+- `Demucs session opened: model 435c987855f7, rekordbox's session options, on the CPU (rekordbox added no GPU provider), rekordbox's own: stems rebuilt`
+- `miss … rebuilt, the model took 2.4 s: 4.50x real time`
+- So rekordbox's model is faster only because it is lighter (Demucs v3); it isn't using the GPU. **Decision (user): force DirectML for the Demucs sessions, on by default.**
+
+## The override (in progress: see STATUS.md "Where things stand")
+- `gpu=1` in config.ini is the default; `gpu=0` turns it off.
+- For every Demucs session, the bridge clones rekordbox's options, sets the memory pattern off and sequential execution, and calls Pioneer's `OrtSessionOptionsAppendExecutionProvider_DML(o, adapter)`.
+- The adapter is the DXGI adapter with the most dedicated video memory. Software adapters are skipped. Each adapter is logged once (`GPU: adapter N: <name>, X GB`).
+- **Fallback, logged:**
+  - no DirectML export: Microsoft's CPU build in the tests;
+  - no adapter, or DirectML refused;
+  - CreateSession with DirectML fails.
+  - In each case ours runs on the CPU with the memory pattern off, and rekordbox's model gets rekordbox's own options.
+- **Risk:** our export may hold operators DirectML lacks. ORT then splits the graph and copies between the GPU and CPU, which may be slower than the CPU alone. The speed line per miss will show it, which would make it case B.
+
 ## Step 1: diagnose (in test build `windows-test-3`)
 The bridge now logs:
 - each execution provider rekordbox asks for (CPU, or DirectML with its device number), and whether that worked;

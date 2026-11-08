@@ -148,3 +148,17 @@ Shared contracts the Windows side must keep:
 - A P-256 SubjectPublicKeyInfo is 91 bytes with the uncompressed point at offset 26 (0x04, then X and Y). The bootstrap's SPKI-to-blob conversion relies on that, and it was checked with openssl.
 - The harness's real-library ordinal check applies only to a DirectML build: Microsoft's CPU build numbers its exports @1 and @2.
 - `release.sh --windows` is opt-in, so the upstream macOS flow is unchanged without it.
+
+## Later findings (real PC and CI, 2026-11-08)
+- **ReOpenFile on real Windows refuses handles opened with NtCreateFile** (wine allows it). `rb_reopen` in win_compat.h falls back to `GetFinalPathNameByHandleW(VOLUME_NAME_GUID)`, then CreateFileW with FILE_FLAG_OPEN_REPARSE_POINT, then a check that it is the same file (volume serial and file index).
+- **objdump text differs** between Ubuntu's mingw binutils and MSYS2's. `bridge/win/pe_tables.py` reads the PE export and import tables directly; build.sh uses it.
+- **MSYS2 turns `/grant` into a path**, so run `icacls` with `MSYS2_ARG_CONV_EXCL='*'`.
+- **Windows checkouts convert `tests/*.txt` to CRLF.** `.gitattributes` pins them to LF, and the C# fixture reader accepts CRLF.
+- **GitHub Actions limits:**
+  - `workflow_dispatch` works only for workflows on the default branch;
+  - this session's git proxy refuses tag pushes.
+  - So `windows-prerelease.yml` starts on a push that changes `.github/windows-prerelease.tag`.
+- **YAML:** a step name with ": " breaks it, so quote names in workflows.
+- **`bootstrap.ps1` updates only the app.** The bridge in rekordbox's folder changes only through Install/Update Stems Cache. The app now offers **Update Stems Cache** when the payload's bridge sha differs from the installed one.
+- **Each test build trusts only its own key,** so a saved payload from an older test build fails the check. That is now logged once, and a fresh payload is fetched.
+- **The user's PC:** rekordbox runs Demucs on the CPU, for both models. Ours (htdemucs) ran at 0.88x real time; rekordbox's (Demucs v3) at 4.5x. Separating two tracks at once halves each one's speed.

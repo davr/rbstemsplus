@@ -1,5 +1,36 @@
 # Windows port: status
 
+> **Current state (2026-11-08, paused at the user's request).** Read "Where things stand" first.
+
+## Where things stand
+- **It works on the user's PC** (rekordbox 7.2.14, Windows 11): Demucs v4 and Stems Cache install, cache hits are served, and uninstall and reinstall work.
+- **CI is green** on Linux and native Windows: the bridge suite (119 passed natively, ACL tests included), 110 app tests, and the `bootstrap.ps1` install test.
+- **Latest test release:** `windows-test-4` on davr/rbstemsplus (commit 51cc402). It adds progress bars, the Update Stems Cache button, the log-spam fix and the bridge's provider and speed lines. Install it with `irm https://github.com/davr/rbstemsplus/releases/download/windows-test-4/bootstrap.ps1 | iex`.
+  - To publish another one: put a new tag in `.github/windows-prerelease.tag` and push.
+- **Committed after windows-test-4, not yet in a release:**
+  - 23f1376: the app shows only the admin-log lines from the current elevated step.
+- **In progress: the GPU override** (the user asked for it, on by default). See [GPU.md](GPU.md).
+  - **Done, bridge side** (`bridge/win/rbstems_bridge_win.c`):
+    - a `gpu` key in config.ini, default 1;
+    - `pick_adapter()` takes the DXGI adapter with the most dedicated video memory, skipping software adapters;
+    - `add_dml()` sets sequential execution and adds DirectML with Pioneer's `…_DML` export;
+    - `create_demucs()` applies this to every Demucs session (ours and rekordbox's), with the memory pattern off, and falls back to the CPU on any failure.
+    - The "Demucs session opened" line says GPU (with the adapter name) or CPU, and why.
+  - **Tested only partly:** it builds with no warnings, and 118 pass under wine with Microsoft's ORT, whose missing DirectML export means the CPU fallback path.
+  - **Not tested yet:**
+    - under wine with Pioneer's DirectML DLL (that run was stopped by the user);
+    - on a real GPU (only the user's PC can do that).
+  - **Still to do:**
+    1. The app side:
+       - add `Gpu` to `Config` in `windows/RBStemsPlus.Core/Config.cs` (parse `gpu` like `enabled`, default true);
+       - add a Settings checkbox "Use the GPU for separation (DirectML)" that writes `gpu=1|0` with `ConfigFile.WriteValues`;
+       - show `gpu=` in `Probe.Text`.
+    2. A test: the bridge's unit/config output, or a fixture with `gpu=0`; check that "on the CPU (gpu=0 in config.ini)" is logged.
+    3. Run the suite with Pioneer's DLL (`RBSTEMS_WIN_ORT=<folder with Pioneer's onnxruntime.dll and DirectML.dll>`), expecting the fallback under wine.
+    4. Update `docs/windows.md` (GPU section) and GPU.md.
+    5. Publish `windows-test-5`. The user then updates Stems Cache with the button, loads a new track, and sends `bridge.log`, which shows the GPU line and "the model took … s" per chunk.
+    6. If DirectML is slow or refuses our model, that is case B in GPU.md: a benchmark tool and a DirectML-friendly export.
+
 This is the working list for the Windows port. The approved design is in [PLAN.md](PLAN.md), and the facts learned along the way are in [NOTES.md](NOTES.md). The list is updated as work moves forward.
 
 Branch: `claude/affectionate-ride-f082bb`.
