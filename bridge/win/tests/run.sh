@@ -167,6 +167,17 @@ else
     fresh gpu3; near=; config 'gpu_v4=1\n'
     out="$(outcome a)"
     expect '! has "gpu_v4=0" && has "GPU: " && has "runs on the CPU"' "gpu_v4=1: the bridge tries DirectML for our model (none here: it says so, runs on the CPU): got \"$out\""
+    # the GPU watchdog (the stand-in: a "GPU" session on this CPU runtime, with a slow run and a short deadline)
+    fresh wd1; near=; config 'gpu_v4=1\n'
+    out="$(RBSTEMS_TEST_GPU_AS_CPU=1 RBSTEMS_TEST_RUN_DELAY_MS=600 RBSTEMS_TEST_GPU_TIMEOUT_MS=150 outcome a d)"
+    expect '[ "$out" = "a model d model " ]' "a stalled GPU run: answered by the CPU twin, later chunks too: got \"$out\""
+    expect '[ "$(count "this model now runs on the CPU")" = 1 ] && [ "$(count "CPU twin of the GPU session opened")" = 1 ] && ! has ERROR' "a stalled GPU run: logged once"
+    fresh wd2; near=; config 'gpu_v4=1\n'
+    out="$(RBSTEMS_TEST_GPU_AS_CPU=1 outcome a d)"
+    expect '[ "$out" = "a model d model " ] && ! has "this model now runs on the CPU"' "a GPU run in time: no fallback: got \"$out\""
+    fresh sh1; near=; config 'gpu_v4=1\n'
+    out="$(RBSTEMS_TEST_GPU_AS_CPU=1 harness share "$(winpath "$scratch/model/hdemucs.onnx")")"
+    expect '! grep -q FAIL <<< "$out" && [ "$(count "shared with an open session")" = 1 ] && [ "$(count "Demucs session opened")" = 3 ]' "GPU sessions of one model are shared: got \"$out\""
     fresh exact; near=
     out="$(outcome a wait a d wait d a)"
     expect '[ "$out" = "a model stored 1 a cache d model stored 2 d cache a cache " ]' "exact hits: got \"$out\""

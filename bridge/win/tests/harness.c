@@ -22,6 +22,8 @@
  *                               "summaries" line: the index loads off rekordbox's threads. Stored
  *                               entries are counted in $RBSTEMS_HARNESS_CACHE (a chosen location),
  *                               else in the default folder.
+ *   harness share MODEL         opens MODEL three times (with RBSTEMS_TEST_GPU_AS_CPU=1 and gpu_v4=1: a GPU session): the
+ *                               copies are one session, released one by one, and a later one opens afresh
  *   harness prun MODEL WHAT...  the same with a model shaped like rekordbox's own (make_model.py
  *                               --pioneer): mag [1, 4, 2048, F] with bin 0 of the real parts at 1,
  *                               x non-zero. Each answer is "model" (exactly the model's), "cache" (x
@@ -437,11 +439,36 @@ static int run(const char *model, int argc, char **argv, int pioneer) {
     return 0;
 }
 
+/* three CreateSessions of one model: with the GPU stand-in the first two are the same session */
+static int share(const char *model) {
+    const OrtApi *a = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+    OrtEnv *env = NULL;
+    OrtSessionOptions *so = NULL;
+    OrtSession *s1 = NULL, *s2 = NULL, *s3 = NULL;
+    wchar_t wm[1024];
+    OrtStatus *st = a->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "rbstems-tests", &env);
+    if (!st) st = a->CreateSessionOptions(&so);
+    if (!st && !MultiByteToWideChar(CP_UTF8, 0, model, -1, wm, 1024)) { printf("FAIL model path\n"); return 1; }
+    if (!st) st = a->CreateSession(env, wm, so, &s1);
+    if (!st) st = a->CreateSession(env, wm, so, &s2);
+    if (st) { printf("FAIL session: %s\n", a->GetErrorMessage(st)); return 1; }
+    check(s1 && s1 == s2, "two opens of a GPU model are one session");
+    a->ReleaseSession(s1);                                  /* still open for the other holder */
+    a->ReleaseSession(s2);
+    st = a->CreateSession(env, wm, so, &s3);
+    check(!st && s3, "after the last release a new session opens");
+    if (s3) a->ReleaseSession(s3);
+    a->ReleaseSessionOptions(so);
+    a->ReleaseEnv(env);
+    return failed ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     if (argc == 3 && !strcmp(argv[1], "load")) return load(argv[2]);
     if (argc == 3 && !strcmp(argv[1], "passthrough")) return passthrough(argv[2]);
     if (argc == 2 && !strcmp(argv[1], "missing")) return missing();
+    if (argc == 3 && !strcmp(argv[1], "share")) return share(argv[2]);
     if (argc >= 3 && !strcmp(argv[1], "run")) return run(argv[2], argc - 3, argv + 3, 0);
     if (argc >= 3 && !strcmp(argv[1], "prun")) return run(argv[2], argc - 3, argv + 3, 1);
     fprintf(stderr, "usage: see the top of harness.c\n");

@@ -81,6 +81,7 @@ static rb_once_t once = RB_ONCE_INIT;
 static rb_mutex lock = RB_MUTEX_INIT;
 static rb_mutex hash_lock = RB_MUTEX_INIT;
 static rb_queue *writer;                /* store_entry only */
+static rb_queue *watchdog;              /* GPU runs' deadlines */
 static rb_queue *maint;                 /* validate, index loads, prune: never on rekordbox's threads */
 #define CACHE_TAIL "\\rbstemsplus\\Cache"
 #define CACHE_FOLDER "RB Stems Plus Cache"   /* a chosen location's folder (the app makes it) */
@@ -981,7 +982,8 @@ static void load_real(void) {
     set_location();
     writer = rb_queue_create(0);
     maint = rb_queue_create(1);
-    if (!writer || !maint) { hooks_ok = 0; logf_("ERROR could not start the bridge's threads: passing everything through"); }
+    watchdog = rb_queue_create(0);
+    if (!writer || !maint || !watchdog) { hooks_ok = 0; logf_("ERROR could not start the bridge's threads: passing everything through"); }
     logf_("bridge loaded (real library %s from %s%s; cache %s%s, enabled=%d, max_gb=%.1f, max_days=%g, rekordbox_model=%d, rebuild %s%s)",
           real_base ? ver : "MISSING", real_path,
           hooks_ok ? "" : ", NOT 1.18.x: passing everything through", base_dir[0] ? base_dir : "NONE",
@@ -1007,13 +1009,21 @@ static void load_real(void) {
 #define MAX_SESSIONS 16
 /* model: what names the session's cache folder and goes into its keys (the model's checksum, or
  * for a rebuilt model rebuilt_id); rebuild: the session's stems are rebuilt from x (rebuild_spec) */
-static struct { OrtSession *s; char model[65]; int rebuild; } sessions[MAX_SESSIONS];
+static struct {
+    OrtSession *s; char model[65]; int rebuild;             /* model[0] == 0: not cached, only watched */
+    int gpu;                                                /* runs on the GPU: watched, with a CPU twin to fall back to */
+    int abandoned;                                          /* the GPU stalled or failed: runs go to the twin */
+    const OrtEnv *env; wchar_t *path; OrtSessionOptions *copts;   /* what the twin is made from (gpu only) */
+    OrtSession *twin;
+    char fp[65]; int refs;                                  /* gpu: the model's checksum; sessions sharing this one */
+    rb_mutex run_lock;                                      /* gpu: one run at a time (DirectML's thread-safety isn't verified) */
+} sessions[MAX_SESSIONS];
 
 static const char *demucs_model(OrtSession *s, int *rebuild) {
     const char *m = NULL;
     rb_lock(&lock);
     for (int i = 0; i < MAX_SESSIONS; i++)
-        if (sessions[i].s == s) { m = sessions[i].model; *rebuild = sessions[i].rebuild; }
+        if (sessions[i].s == s && sessions[i].model[0]) { m = sessions[i].model; *rebuild = sessions[i].rebuild; }
     rb_unlock(&lock);
     return m;
 }
@@ -2571,9 +2581,24 @@ static OrtStatus *ORT_API_CALL hook_CreateSession(const OrtEnv *env, const ORTCH
         logf_("ERROR cannot read %s", path[0] ? path : "the model (its path isn't valid UTF-16 or is too long)");
         return R->CreateSession(env, model_path, options, out);
     }
+    /* rekordbox opens the same model more than once: on the GPU the copies would each take the model's
+     * weights and activations (8 GB cards run out), so they share one session */
+    rb_lock(&lock);
+    for (int i = 0; i < MAX_SESSIONS; i++)
+        if (sessions[i].s && sessions[i].gpu && !sessions[i].abandoned && !strcmp(sessions[i].fp, fp)) {
+            sessions[i].refs++;
+            *out = sessions[i].s;
+            rb_unlock(&lock);
+            logf_("Demucs session opened: model %.12s, shared with an open session on the GPU", fp);
+            return NULL;
+        }
+    rb_unlock(&lock);
     int on_gpu = 0;
     OrtStatus *st = create_demucs(env, model_path, options, out, fp, &how, &on_gpu);
     int cached = !st && enabled && base_dir[0];            /* a chosen location may come back later */
+#ifdef RBSTEMS_TEST_REAL_PATH
+    if (!st && options && getenv("RBSTEMS_TEST_GPU_AS_CPU") && is_ours(fp) && gpu_v4_on) on_gpu = 1;   /* a stand-in for the GPU */
+#endif
     /* rekordbox's own model: rebuilt and cached only where this account turned it on */
     int pioneer = is_pioneer(fp), rebuild = pioneer && rekordbox_model;
     char id[65];
@@ -2584,11 +2609,28 @@ static OrtStatus *ORT_API_CALL hook_CreateSession(const OrtEnv *env, const ORTCH
                    : !gpu_on ? ", on the CPU (gpu=0 in config.ini)" : is_ours(fp) && !gpu_v4_on ? ", on the CPU (gpu_v4=0: Demucs v4 on the GPU is experimental)" : ", on the CPU",
                    cached ? "" : ", not cached",
                    !cached || !pioneer ? "" : rebuild ? ", rekordbox's own: stems rebuilt" : ", rekordbox's own: not cached here (rekordbox_model=0)");
-    if (!cached) return st;
+    if (st || (!cached && !on_gpu)) return st;
+    /* a GPU session is watched: what a CPU twin is made from (rekordbox's options, as they were) is kept */
+    OrtSessionOptions *copts = NULL;
+    if (on_gpu && options && !R->CloneSessionOptions(options, &copts) && is_ours(fp)) R->DisableMemPattern(copts);
+    wchar_t *wpath = on_gpu ? wcsdup(model_path) : NULL;
+    int stored = 0;
     rb_lock(&lock);
     for (int i = 0; i < MAX_SESSIONS; i++)
-        if (!sessions[i].s) { sessions[i].s = *out; memcpy(sessions[i].model, id, 65); sessions[i].rebuild = rebuild; break; }
+        if (!sessions[i].s) {
+            memset(&sessions[i], 0, sizeof sessions[i]);
+            sessions[i].s = *out;
+            if (cached) { memcpy(sessions[i].model, id, 65); sessions[i].rebuild = rebuild; }
+            sessions[i].gpu = on_gpu && copts && wpath;
+            memcpy(sessions[i].fp, fp, 65);
+            sessions[i].refs = 1;
+            sessions[i].env = env; sessions[i].path = wpath; sessions[i].copts = copts;
+            stored = 1;
+            break;
+        }
     rb_unlock(&lock);
+    if (!stored) { if (copts) R->ReleaseSessionOptions(copts); free(wpath); }
+    if (!cached) return st;
     /* off rekordbox's threads, after a chosen location's check: this model's summaries, then
      * (once per load) the limits; a location that comes back later is counted by recheck */
     char *model = strdup(id);
@@ -2605,10 +2647,21 @@ static OrtStatus *ORT_API_CALL hook_CreateSession(const OrtEnv *env, const ORTCH
 }
 
 static void ORT_API_CALL hook_ReleaseSession(OrtSession *s) {
+    OrtSession *twin = NULL;
+    OrtSessionOptions *copts = NULL;
+    wchar_t *wpath = NULL;
     rb_lock(&lock);
     for (int i = 0; i < MAX_SESSIONS; i++)
-        if (sessions[i].s == s) sessions[i].s = NULL;
+        if (sessions[i].s == s && sessions[i].refs > 1) { sessions[i].refs--; rb_unlock(&lock); return; }   /* still shared */
+    for (int i = 0; i < MAX_SESSIONS; i++)
+        if (sessions[i].s == s) {
+            twin = sessions[i].twin; copts = sessions[i].copts; wpath = sessions[i].path;
+            memset(&sessions[i], 0, sizeof sessions[i]);
+        }
     rb_unlock(&lock);
+    if (twin) R->ReleaseSession(twin);
+    if (copts) R->ReleaseSessionOptions(copts);
+    free(wpath);
     R->ReleaseSession(s);
 }
 
@@ -2798,6 +2851,123 @@ static void queue_store(char *model, char *key, int16_t *pcm, float *mix, size_t
 static _Thread_local double run_returned;       /* when the last hooked Run on this thread returned */
 static struct { double hook, model, between; int n, nb; } run_stats;
 
+/* ---------------------------------------------------------------- the GPU watchdog */
+
+/* A GPU run that stalls (a model that doesn't fit the GPU's memory spills into shared memory and
+ * can take minutes per chunk) would leave rekordbox stuck. So a GPU session's Run gets a
+ * deadline: past it the run is terminated and answered by a CPU twin of the session, and every
+ * later run of that session goes to the twin. */
+typedef struct { OrtRunOptions *ro; int done; int refs; } watch;
+static rb_mutex twin_lock = RB_MUTEX_INIT;
+
+static void watch_unref(watch *w) {
+    rb_lock(&lock);
+    int last = --w->refs == 0;
+    rb_unlock(&lock);
+    if (last) { R->ReleaseRunOptions(w->ro); free(w); }
+}
+static void watch_fire(void *ctx) {
+    watch *w = ctx;
+    rb_lock(&lock);
+    int stop = !w->done;
+    rb_unlock(&lock);
+    if (stop) R->RunOptionsSetTerminate(w->ro);
+    watch_unref(w);
+}
+
+static double gpu_deadline(size_t samples) {
+    double d = 25.0, scaled = 3.0 * (double)samples / 44100.0;   /* the CPU needs ~1.1x the chunk's length for Demucs v4 */
+    if (scaled > d) d = scaled;
+#ifdef RBSTEMS_TEST_REAL_PATH
+    if (getenv("RBSTEMS_TEST_GPU_TIMEOUT_MS")) d = atof(getenv("RBSTEMS_TEST_GPU_TIMEOUT_MS")) / 1000.0;
+#endif
+    return d;
+}
+
+/* every Run of a Demucs session: the GPU ones watched, the others straight through. samples: the
+ * chunk's length (0 when unknown) */
+static OrtStatus *guarded_run(OrtSession *s, const OrtRunOptions *ro, const char *const *in_names, const OrtValue *const *inputs,
+                              size_t n_in, const char *const *out_names, size_t n_out, OrtValue **outputs, size_t samples) {
+    int gpu = 0, gone = 0, i;
+    OrtSession *twin = NULL;
+    rb_lock(&lock);
+    for (i = 0; i < MAX_SESSIONS; i++)
+        if (sessions[i].s == s) { gpu = sessions[i].gpu; gone = sessions[i].abandoned; twin = sessions[i].twin; break; }
+    rb_unlock(&lock);
+    rb_mutex *run_lock = gpu ? &sessions[i].run_lock : NULL;
+    if (!gpu) return R->Run(s, ro, in_names, inputs, n_in, out_names, n_out, outputs);
+    char msg[300] = "";
+    if (!gone) {
+        rb_lock(run_lock);                                  /* the deadline counts from when this run starts */
+        rb_lock(&lock);
+        gone = sessions[i].abandoned;                       /* a run that waited: the one before it may have stalled */
+        rb_unlock(&lock);
+        if (gone) rb_unlock(run_lock);
+    }
+    if (!gone) {
+        watch *w = calloc(1, sizeof *w);
+        if (!w || !watchdog || R->CreateRunOptions(&w->ro)) {
+            free(w);
+            OrtStatus *st = R->Run(s, ro, in_names, inputs, n_in, out_names, n_out, outputs);
+            rb_unlock(run_lock);
+            return st;
+        }
+        w->refs = 2;
+        double deadline = gpu_deadline(samples);
+        if (rb_after(watchdog, deadline, watch_fire, w)) w->refs = 1;
+#ifdef RBSTEMS_TEST_REAL_PATH
+        if (getenv("RBSTEMS_TEST_RUN_DELAY_MS")) rb_sleep_seconds(atof(getenv("RBSTEMS_TEST_RUN_DELAY_MS")) / 1000.0);
+#endif
+        double t0 = rb_mono_seconds();
+        OrtStatus *st = R->Run(s, w->ro, in_names, inputs, n_in, out_names, n_out, outputs);
+        double took = rb_mono_seconds() - t0;
+        rb_lock(&lock);
+        w->done = 1;
+        rb_unlock(&lock);
+        watch_unref(w);
+        if (!st) { rb_unlock(run_lock); return NULL; }
+        snprintf(msg, sizeof msg, "%s", R->GetErrorMessage(st));
+        R->ReleaseStatus(st);
+        rb_lock(&lock);
+        for (i = 0; i < MAX_SESSIONS; i++)
+            if (sessions[i].s == s) { gone = sessions[i].abandoned; sessions[i].abandoned = 1; }
+        rb_unlock(&lock);
+        rb_unlock(run_lock);                                /* waiting runs now see abandoned and take the twin */
+        if (!gone)
+            logf_("GPU run %s after %.1f s (%s): this model now runs on the CPU (the GPU session keeps its memory until rekordbox closes it)",
+                  took >= deadline ? "took over its deadline" : "failed", took, msg);
+    }
+    /* the CPU twin, made on first use */
+    rb_lock(&twin_lock);
+    rb_lock(&lock);
+    for (i = 0; i < MAX_SESSIONS; i++)
+        if (sessions[i].s == s) { twin = sessions[i].twin; break; }
+    const OrtEnv *env = i < MAX_SESSIONS ? sessions[i].env : NULL;
+    OrtSessionOptions *copts = i < MAX_SESSIONS ? sessions[i].copts : NULL;
+    wchar_t *wpath = i < MAX_SESSIONS && sessions[i].path ? wcsdup(sessions[i].path) : NULL;
+    rb_unlock(&lock);
+    OrtStatus *st = NULL;
+    if (!twin) {
+        if (!copts || !wpath) st = R->CreateStatus(ORT_FAIL, "no CPU twin to fall back to");
+        else {
+            st = R->CreateSession(env, wpath, copts, &twin);
+            if (!st) {
+                rb_lock(&lock);
+                for (i = 0; i < MAX_SESSIONS; i++)
+                    if (sessions[i].s == s) { sessions[i].twin = twin; break; }
+                int kept = i < MAX_SESSIONS;
+                rb_unlock(&lock);
+                if (!kept) { R->ReleaseSession(twin); twin = NULL; st = R->CreateStatus(ORT_FAIL, "the session was released"); }
+                else logf_("CPU twin of the GPU session opened");
+            }
+        }
+    }
+    free(wpath);
+    rb_unlock(&twin_lock);
+    if (st) return st;
+    return R->Run(twin, ro, in_names, inputs, n_in, out_names, n_out, outputs);
+}
+
 /* the text appended to a hit's or miss's line; a miss (model >= 0) also feeds the averages */
 static void timing_text(char *out, size_t n, double hook, double model, double between) {
     char m[40] = "", b[64] = "";
@@ -2836,14 +3006,14 @@ static OrtStatus *run_inner(OrtSession *s, const OrtRunOptions *ro, const char *
     tensor mix, mag;
     if (!model || im < 0 || ig < 0 || ix < 0 || ixt < 0 || n_out != 2 || view(inputs[im], &mix) || view(inputs[ig], &mag)
         || mix.ndim != 3 || mix.dims[0] != 1 || mix.dims[1] != 2 || mag.ndim != 4)
-        return R->Run(s, ro, in_names, inputs, n_in, out_names, n_out, outputs);
+        return guarded_run(s, ro, in_names, inputs, n_in, out_names, n_out, outputs, 0);
     size_t L = (size_t)mix.dims[2];
     double mean, std;
     mean_std(&mix, &mean, &std);
     /* silence or broken input: never cached; nor anything while a chosen location is pending or
      * lost (no drive I/O). Our model's NaN for silence becomes 0. */
     if (!isfinite(mean) || !isfinite(std) || std <= 0 || L < DESC_FRAME || loc_now() != LOC_AVAILABLE) {
-        OrtStatus *st = R->Run(s, ro, in_names, inputs, n_in, out_names, n_out, outputs);
+        OrtStatus *st = guarded_run(s, ro, in_names, inputs, n_in, out_names, n_out, outputs, L);
         if (!st) sanitize_ours(outputs, ix, ixt);
         return st;
     }
@@ -2866,7 +3036,7 @@ static OrtStatus *run_inner(OrtSession *s, const OrtRunOptions *ro, const char *
     float *ms = malloc(L * sizeof(float)), *mm = malloc(L * sizeof(float));
     if (!pcm || !desc || !ms || !mm) {
         free(pcm); free(desc); free(ms); free(mm);
-        OrtStatus *st = R->Run(s, ro, in_names, inputs, n_in, out_names, n_out, outputs);
+        OrtStatus *st = guarded_run(s, ro, in_names, inputs, n_in, out_names, n_out, outputs, L);
         if (!st) sanitize_ours(outputs, ix, ixt);
         return st;
     }
@@ -2958,7 +3128,7 @@ static OrtStatus *run_inner(OrtSession *s, const OrtRunOptions *ro, const char *
 
     /* 3. the model, then cache its stems and the chunk's summary in the background */
     double t_run = rb_mono_seconds();
-    OrtStatus *st = R->Run(s, ro, in_names, inputs, n_in, out_names, n_out, outputs);
+    OrtStatus *st = guarded_run(s, ro, in_names, inputs, n_in, out_names, n_out, outputs, L);
     t_run = rb_mono_seconds() - t_run;
     tensor tx, txt;
     free(ms); free(mm); free(desc);
