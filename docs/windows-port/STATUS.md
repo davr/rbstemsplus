@@ -9,6 +9,12 @@
   - To publish another one: put a new tag in `.github/windows-prerelease.tag` and push.
 - **Committed after windows-test-4, not yet in a release:**
   - 23f1376: the app shows only the admin-log lines from the current elevated step.
+- **windows-test-6 (this branch, `claude/affectionate-ride-f082bb`):**
+  - `gpu_v4=0` default (Demucs v4 stays on the CPU unless asked), the Settings checkbox, tests;
+  - per-chunk timing lines in `bridge.log` (hook, model, bridge, rekordbox's time between chunks);
+  - a watchdog with a CPU twin for GPU runs, and one shared GPU session per model;
+  - `rbsp-bench.exe` ([GPU-BENCH.md](GPU-BENCH.md)); the bridge suite has 126 tests;
+  - results of windows-test-5 and the reasons are in [GPU.md](GPU.md). The fixed-shape model stays on `claude/dml-model`.
 - **In progress: the GPU override** (the user asked for it, on by default). See [GPU.md](GPU.md).
   - **Done, bridge side** (`bridge/win/rbstems_bridge_win.c`):
     - a `gpu` key in config.ini, default 1;

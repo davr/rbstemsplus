@@ -35,6 +35,22 @@ So the questions are, in order:
 - `miss … rebuilt, the model took 2.4 s: 4.50x real time`
 - So rekordbox's model is faster only because it is lighter (Demucs v3); it isn't using the GPU. **Decision (user): force DirectML for the Demucs sessions, on by default.**
 
+## Result of the override (windows-test-5, user's PC, RTX 4060 Laptop 8 GB, 2026-11-08)
+- **The GPU choice works:** the RTX 4060 was picked over the AMD 780M and the software adapter.
+- **rekordbox's own model (Demucs v3) is fast on DirectML:** `the model took 0.3 s: 41x real time`, against 2.4 s (4.5x) on the CPU.
+  - But chunks still arrive only every ~1.45 s, so ~1.1 s per chunk goes on something other than `Run`: rekordbox's own TensorFlow STFT/iSTFT, decoding, or the bridge's own work on rekordbox's thread. windows-test-6 logs the split (`hook X s (model Y, bridge Z), rekordbox W s since the last chunk`, plus an average every 20 chunks).
+- **Our Demucs v4 on DirectML breaks rekordbox:**
+  - two GPU sessions open and no chunk ever completes; rekordbox stays on "Initializing STEMS Engine";
+  - Task Manager: 3D at 95%, **dedicated memory 7.7 of 8 GB, shared 12.7 GB**. The weights and activations don't fit, and the overflow goes through system memory over PCIe;
+  - our export has 9,800 nodes (555 `Shape` ops: dynamic shapes), which may also split between the GPU and CPU.
+
+### What windows-test-6 changes
+- **`gpu_v4=0` is the new default:** `gpu=1` now means rekordbox's own model on the GPU; Demucs v4 stays on the CPU (0.88x) unless `gpu_v4=1` (Settings: "Also use the GPU for Demucs v4 (experimental)").
+- **A watchdog:** a GPU run gets a deadline (the larger of 25 s and 3x the chunk's length). Past it, the run is terminated and answered by a CPU twin of the session, and later runs of that model use the twin. Logged once (`GPU run took over its deadline ... this model now runs on the CPU`). A stall inside one GPU operator can't be interrupted until it returns, but the typical spill-to-shared-memory slowness is between operators.
+- **One GPU session per model:** rekordbox opens the model twice; the copies now share one session (runs are serialised), so the GPU holds the weights once.
+- **`rbsp-bench.exe`** to find out why Demucs v4 stalls (memory, graph splitting or one slow operator) without rekordbox: see [GPU-BENCH.md](GPU-BENCH.md).
+- The fixed-shape model (targets graph splitting only) is on branch `claude/dml-model`; its files are on release `windows-test-6dml2`. `rbsp-bench.exe` can test it.
+
 ## The override (in progress: see STATUS.md "Where things stand")
 - `gpu=1` in config.ini is the default; `gpu=0` turns it off.
 - For every Demucs session, the bridge clones rekordbox's options, sets the memory pattern off and sequential execution, and calls Pioneer's `OrtSessionOptionsAppendExecutionProvider_DML(o, adapter)`.
