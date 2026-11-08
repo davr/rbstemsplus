@@ -2791,9 +2791,44 @@ static void queue_store(char *model, char *key, int16_t *pcm, float *mix, size_t
     }
 }
 
+/* where a chunk's time goes: "hook" is the whole Run call as rekordbox sees it, "model" the model's own
+ * Run inside it, "other" the bridge's work (hash, summary, lookup, rebuild), and "between" the time since the
+ * previous Run on this thread returned (rekordbox's own work: its STFT/iSTFT, decoding). Averaged every 20
+ * misses. (windows-test-5: the model took 0.3 s on the GPU, but chunks arrived every ~1.4 s.) */
+static _Thread_local double run_returned;       /* when the last hooked Run on this thread returned */
+static struct { double hook, model, between; int n, nb; } run_stats;
+
+/* the text appended to a hit's or miss's line; a miss (model >= 0) also feeds the averages */
+static void timing_text(char *out, size_t n, double hook, double model, double between) {
+    char m[40] = "", b[64] = "";
+    if (model >= 0) snprintf(m, sizeof m, " (model %.2f, bridge %.2f)", model, hook - model);
+    if (between >= 0) snprintf(b, sizeof b, ", rekordbox %.2f s since the last chunk", between);
+    snprintf(out, n, "  [hook %.2f s%s%s]", hook, m, b);
+    if (model < 0) return;
+    rb_lock(&lock);
+    run_stats.hook += hook; run_stats.model += model; run_stats.n++;
+    if (between >= 0) { run_stats.between += between; run_stats.nb++; }
+    int report = run_stats.n % 20 == 0;
+    double cnt = run_stats.n, ah = run_stats.hook / cnt, am = run_stats.model / cnt, bt = run_stats.nb ? run_stats.between / run_stats.nb : -1;
+    rb_unlock(&lock);
+    if (report) logf_("timing, average of %d misses: hook %.2f s (model %.2f, bridge %.2f), rekordbox %.2f s between chunks", (int)cnt, ah, am, ah - am, bt);
+}
+
+static OrtStatus *run_inner(OrtSession *s, const OrtRunOptions *ro, const char *const *in_names, const OrtValue *const *inputs,
+                            size_t n_in, const char *const *out_names, size_t n_out, OrtValue **outputs, double t_enter, double between);
+
 static OrtStatus *ORT_API_CALL hook_Run(OrtSession *s, const OrtRunOptions *ro, const char *const *in_names,
                                         const OrtValue *const *inputs, size_t n_in, const char *const *out_names,
                                         size_t n_out, OrtValue **outputs) {
+    double t0 = rb_mono_seconds();
+    double between = run_returned > 0 ? t0 - run_returned : -1;
+    OrtStatus *st = run_inner(s, ro, in_names, inputs, n_in, out_names, n_out, outputs, t0, between);
+    run_returned = rb_mono_seconds();
+    return st;
+}
+
+static OrtStatus *run_inner(OrtSession *s, const OrtRunOptions *ro, const char *const *in_names, const OrtValue *const *inputs,
+                            size_t n_in, const char *const *out_names, size_t n_out, OrtValue **outputs, double t_enter, double between) {
     int rebuild = 0;
     const char *model = demucs_model(s, &rebuild);
     int im = model ? index_of(in_names, n_in, "mix") : -1, ig = model ? index_of(in_names, n_in, "mag") : -1;
@@ -2854,7 +2889,9 @@ static OrtStatus *ORT_API_CALL hook_Run(OrtSession *s, const OrtRunOptions *ro, 
         rb_lock(&lock);
         long long h = ++hits, nh = near_hits, m = misses;
         rb_unlock(&lock);
-        logf_("hit  %.12s (%zu samples)  [%lld hits, %lld near, %lld misses]", key, L, h, nh, m);
+        char tt[160];
+        timing_text(tt, sizeof tt, rb_mono_seconds() - t_enter, -1, between);
+        logf_("hit  %.12s (%zu samples)  [%lld hits, %lld near, %lld misses]%s", key, L, h, nh, m, tt);
         if (near_on && !desc_is_rbd2(model, key)) {         /* an older or damaged entry: (re)write its summary */
             float *mixc = malloc(mix.count * sizeof(float));
             char *kk = strdup(key), *mdl = strdup(model);
@@ -2963,8 +3000,10 @@ static OrtStatus *ORT_API_CALL hook_Run(OrtSession *s, const OrtRunOptions *ro, 
     rb_lock(&lock);
     long long h = hits, nh = near_hits, m = ++misses;
     rb_unlock(&lock);
-    logf_("miss %.12s (%zu samples%s, the model took %.1f s: %.2fx real time)  [%lld hits, %lld near, %lld misses]", key, L, rebuilt ? ", rebuilt" : "",
-          t_run, t_run > 0 ? (double)L / 44100.0 / t_run : 0.0, h, nh, m);
+    char tt[160];
+    timing_text(tt, sizeof tt, rb_mono_seconds() - t_enter, t_run, between);
+    logf_("miss %.12s (%zu samples%s, the model took %.1f s: %.2fx real time)  [%lld hits, %lld near, %lld misses]%s", key, L, rebuilt ? ", rebuilt" : "",
+          t_run, t_run > 0 ? (double)L / 44100.0 / t_run : 0.0, h, nh, m, tt);
     if (!mixc || !kk || !mdl || !writer_admit(bytes)) {
         free(mixc); free(kk); free(mdl); free(pcm);
         return st;
