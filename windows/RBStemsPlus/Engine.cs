@@ -253,6 +253,7 @@ public sealed class Engine
         foreach (var a in args) psi.ArgumentList.Add(a);
         try
         {
+            adminLogSeen = Files.Size(p.AdminLog) ?? 0;     // only what this step writes is shown
             using var proc = Process.Start(psi)!;
             proc.WaitForExit();
             var r = Enum.IsDefined(typeof(AdminExit), proc.ExitCode) ? (AdminExit)proc.ExitCode : AdminExit.Failed;
@@ -273,7 +274,7 @@ public sealed class Engine
         try
         {
             using var fs = new FileStream(p.AdminLog, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            if (adminLogSeen == 0 || adminLogSeen > fs.Length) adminLogSeen = Math.Max(0, fs.Length - 4000);
+            if (adminLogSeen > fs.Length) adminLogSeen = 0;
             fs.Position = adminLogSeen;
             var text = new StreamReader(fs).ReadToEnd();
             adminLogSeen = fs.Length;
