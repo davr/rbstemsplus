@@ -156,6 +156,17 @@ else
 
   # ---------------------------------------------------------------- exact and near hits
   if [ -z "$have_model" ]; then skip "the model tests (need python3)"; else
+    # which Demucs sessions go on the GPU: rekordbox's own with gpu=1 (default), ours only with gpu_v4=1 (this runtime has no DirectML:
+    # the line says why a session stays on the CPU)
+    fresh gpu1; near=
+    out="$(outcome a)"
+    expect 'has "gpu_v4=0: Demucs v4 on the GPU is experimental"' "our model, defaults: stays on the CPU (gpu_v4=0): got \"$out\""
+    fresh gpu2; near=; config 'gpu=0\n'
+    out="$(outcome a)"
+    expect 'has "on the CPU (gpu=0 in config.ini)"' "gpu=0: on the CPU, and says so: got \"$out\""
+    fresh gpu3; near=; config 'gpu_v4=1\n'
+    out="$(outcome a)"
+    expect '! has "gpu_v4=0" && has "GPU: " && has "runs on the CPU"' "gpu_v4=1: the bridge tries DirectML for our model (none here: it says so, runs on the CPU): got \"$out\""
     fresh exact; near=
     out="$(outcome a wait a d wait d a)"
     expect '[ "$out" = "a model stored 1 a cache d model stored 2 d cache a cache " ]' "exact hits: got \"$out\""

@@ -104,7 +104,8 @@ static int rekordbox_model = 0;         /* this account caches rekordbox's own (
  * .desc files are still written, so a future pre-cache (inexact decodes) can turn it on with every
  * entry saved meanwhile. A test build takes RBSTEMS_TEST_NEAR_HITS as the default. */
 static int near_on = 0;                /* config.ini near_hits */
-static int gpu_on = 1;                  /* config.ini gpu: Demucs sessions run on the GPU (DirectML), on by default */
+static int gpu_on = 1;                  /* config.ini gpu: rekordbox's own Demucs model runs on the GPU (DirectML), on by default */
+static int gpu_v4_on = 0;               /* config.ini gpu_v4: our Demucs v4 model too (experimental: it exhausts an 8 GB GPU), off by default */
 static long long max_bytes = 20LL << 30;
 static double max_days = 60;
 static long long total_bytes = -1;      /* -1: not counted yet */
@@ -207,7 +208,7 @@ static int yes_no(const char *v) {
 #define CONFIG_LINE_MAX 1024
 
 typedef struct {
-    int enabled, rekordbox_model, near_hits, gpu;
+    int enabled, rekordbox_model, near_hits, gpu, gpu_v4;
     long long max_bytes;
     double max_days;
     int location;                       /* 0: this Mac; 1: a chosen location; -1: one is set, wrongly */
@@ -327,8 +328,9 @@ static int parse_config(const char *b, size_t n, config *c) {
         } else if (!strcmp(key, "cache_id")) {
             if (!uuid_ok(val) || (have_id && strcasecmp(c->id, val))) bad = 1;
             else { memcpy(c->id, val, 37); have_id = 1; }
-        } else if (!strcmp(key, "enabled") || !strcmp(key, "rekordbox_model") || !strcmp(key, "near_hits") || !strcmp(key, "gpu")) {
-            int yn = yes_no(val), *dst = key[0] == 'e' ? &c->enabled : key[0] == 'n' ? &c->near_hits : key[0] == 'g' ? &c->gpu : &c->rekordbox_model;
+        } else if (!strcmp(key, "enabled") || !strcmp(key, "rekordbox_model") || !strcmp(key, "near_hits") || !strcmp(key, "gpu") || !strcmp(key, "gpu_v4")) {
+            int yn = yes_no(val), *dst = !strcmp(key, "enabled") ? &c->enabled : !strcmp(key, "near_hits") ? &c->near_hits : !strcmp(key, "gpu") ? &c->gpu
+                                       : !strcmp(key, "gpu_v4") ? &c->gpu_v4 : &c->rekordbox_model;
             if (yn >= 0) *dst = yn;
             else logf_("config: ignored %s=%.40s (allowed 1 or 0)", key, val);
         } else if (!strcmp(key, "max_gb") || !strcmp(key, "max_days")) {
@@ -925,7 +927,7 @@ static void set_paths(void) {
  * wrongly: never this PC instead). Then the folders: the default one, which keeps the model-hash
  * memos in either case; a chosen location is never created by the bridge. */
 static void set_location(void) {
-    config c = {.enabled = 1, .rekordbox_model = 0, .near_hits = 0, .gpu = 1, .max_bytes = 20LL << 30, .max_days = 60};
+    config c = {.enabled = 1, .rekordbox_model = 0, .near_hits = 0, .gpu = 1, .gpu_v4 = 0, .max_bytes = 20LL << 30, .max_days = 60};
 #ifdef RBSTEMS_TEST_REAL_PATH
     if (getenv("RBSTEMS_TEST_NEAR_HITS")) c.near_hits = atoi(getenv("RBSTEMS_TEST_NEAR_HITS")) != 0;
 #endif
@@ -934,6 +936,7 @@ static void set_location(void) {
     rekordbox_model = c.rekordbox_model;
     near_on = c.near_hits;
     gpu_on = c.gpu;
+    gpu_v4_on = c.gpu_v4;
     max_bytes = c.max_bytes;
     max_days = c.max_days;
     if (!memo_dir[0]) return;                               /* no home for the cache: nothing cached */
@@ -2460,8 +2463,9 @@ static OrtStatus *create_demucs(const OrtEnv *env, const ORTCHAR_T *path, const 
     *how = "rekordbox's session options";
     *gpu = 0;
     int ours = is_ours(fp);
-    if (!options || (!ours && !gpu_on)) return R->CreateSession(env, path, options, out);
-    for (int attempt = gpu_on ? 0 : 1; attempt < 2; attempt++) {
+    int want_gpu = ours ? gpu_on && gpu_v4_on : gpu_on;     /* ours: only with gpu_v4=1 */
+    if (!options || (!ours && !want_gpu)) return R->CreateSession(env, path, options, out);
+    for (int attempt = want_gpu ? 0 : 1; attempt < 2; attempt++) {
         OrtSessionOptions *o = NULL;
         const char *dml_what = "";
         int with_dml = 0;
@@ -2576,7 +2580,8 @@ static OrtStatus *ORT_API_CALL hook_CreateSession(const OrtEnv *env, const ORTCH
     if (rebuild) rebuilt_id(fp, id);
     else memcpy(id, fp, 65);
     if (!st) logf_("Demucs session opened: model %.12s, %s%s%s%s", fp, how,
-                   on_gpu ? "" : had_dml(options) ? ", on the GPU (rekordbox's DirectML)" : gpu_on ? ", on the CPU" : ", on the CPU (gpu=0 in config.ini)",
+                   on_gpu ? "" : had_dml(options) ? ", on the GPU (rekordbox's DirectML)"
+                   : !gpu_on ? ", on the CPU (gpu=0 in config.ini)" : is_ours(fp) && !gpu_v4_on ? ", on the CPU (gpu_v4=0: Demucs v4 on the GPU is experimental)" : ", on the CPU",
                    cached ? "" : ", not cached",
                    !cached || !pioneer ? "" : rebuild ? ", rekordbox's own: stems rebuilt" : ", rekordbox's own: not cached here (rekordbox_model=0)");
     if (!cached) return st;

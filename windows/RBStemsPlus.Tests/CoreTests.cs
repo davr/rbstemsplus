@@ -113,6 +113,11 @@ public class ConfigTests
         Assert.Contains("gpu=0\n", File.ReadAllText(file));
         Assert.True(ConfigFile.WriteGpu(file, true));
         Assert.True(ConfigFile.Read(file).Config.Gpu);
+        Assert.False(ConfigFile.Read(file).Config.GpuV4);                // Demucs v4 on the GPU is off until asked for
+        Assert.True(ConfigFile.WriteGpuV4(file, true));
+        Assert.True(ConfigFile.Read(file).Config.GpuV4);
+        Assert.True(ConfigFile.Read(file).Config.Gpu);                   // the two switches are separate
+        Assert.Contains("gpu_v4=1\n", File.ReadAllText(file));
     }
 
     [Fact]

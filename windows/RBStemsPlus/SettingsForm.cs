@@ -11,7 +11,8 @@ sealed class SettingsForm : Form
     readonly Log log;
     readonly NumericUpDown maxGB = new() { Minimum = 0.1m, Maximum = 100000, DecimalPlaces = 1, Increment = 1, Width = 90 };
     readonly NumericUpDown maxDays = new() { Minimum = 1, Maximum = 36500, Width = 90 };
-    readonly CheckBox gpu = new() { AutoSize = true, Text = "Use the GPU (DirectML) to separate stems" };
+    readonly CheckBox gpu = new() { AutoSize = true, Text = "Use the GPU (DirectML) for rekordbox's own stems" };
+    readonly CheckBox gpuV4 = new() { AutoSize = true, Text = "Also use the GPU for Demucs v4 (experimental: can stall on 8 GB GPUs)" };
     readonly Label where = new() { AutoSize = true, MaximumSize = new Size(420, 0) };
     string? chosenDir, chosenId;
 
@@ -29,6 +30,7 @@ sealed class SettingsForm : Form
         maxGB.Value = (decimal)st.Config.MaxGB;
         maxDays.Value = (decimal)st.Config.MaxDays;
         gpu.Checked = st.Config.Gpu;
+        gpuV4.Checked = st.Config.GpuV4;
         if (st.Location is ConfigLocation.Chosen c) { chosenDir = c.Dir; chosenId = c.Id; }
         var change = new Button { Text = "Change…", AutoSize = true };
         var thisPc = new Button { Text = "Use This PC", AutoSize = true };
@@ -49,7 +51,9 @@ sealed class SettingsForm : Form
         grid.Controls.Add(new Label { Text = "Remove stems unused for (days):", AutoSize = true, Margin = new Padding(0, 6, 8, 0) });
         grid.Controls.Add(maxDays);
         grid.Controls.Add(new Label { Text = "Separation:", AutoSize = true, Margin = new Padding(0, 6, 8, 0) });
-        grid.Controls.Add(gpu);
+        var gp = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown };
+        gp.Controls.AddRange(new Control[] { gpu, gpuV4 });
+        grid.Controls.Add(gp);
         var note = new Label { AutoSize = true, MaximumSize = new Size(560, 0), ForeColor = SystemColors.GrayText, Margin = new Padding(0, 12, 0, 12),
                                Text = "The settings apply the next time rekordbox opens. Saved stems take about 13 MB per minute of music." };
         var buttons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Bottom, FlowDirection = FlowDirection.RightToLeft };
@@ -103,6 +107,7 @@ sealed class SettingsForm : Form
         var before = ConfigFile.Read(p.ConfigFile);
         bool ok = ConfigFile.WriteLimits(p.ConfigFile, (double)maxGB.Value, (double)maxDays.Value);
         if (ok && before.Config.Gpu != gpu.Checked) ok = ConfigFile.WriteGpu(p.ConfigFile, gpu.Checked);
+        if (ok && before.Config.GpuV4 != gpuV4.Checked) ok = ConfigFile.WriteGpuV4(p.ConfigFile, gpuV4.Checked);
         var beforeDir = before.Location is ConfigLocation.Chosen c ? c.Dir : null;
         if (ok && beforeDir != chosenDir) ok = ConfigFile.WriteLocation(p.ConfigFile, chosenDir, chosenId);
         if (!ok)
@@ -111,7 +116,7 @@ sealed class SettingsForm : Form
             DialogResult = DialogResult.None;
             return;
         }
-        log.Write($"Settings: max_gb={ConfigFile.Number((double)maxGB.Value)} max_days={ConfigFile.Number((double)maxDays.Value)} gpu={(gpu.Checked ? 1 : 0)} location={chosenDir ?? "this PC"}");
+        log.Write($"Settings: max_gb={ConfigFile.Number((double)maxGB.Value)} max_days={ConfigFile.Number((double)maxDays.Value)} gpu={(gpu.Checked ? 1 : 0)} gpu_v4={(gpuV4.Checked ? 1 : 0)} location={chosenDir ?? "this PC"}");
         if (beforeDir != chosenDir && beforeDir == null && !Rekordbox.Running())
         {
             // switching to a drive starts empty: this PC's stems go (as on macOS)
