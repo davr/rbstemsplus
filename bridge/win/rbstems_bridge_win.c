@@ -2430,6 +2430,24 @@ static void session_open_job(void *ctx) {
     free(model);
 }
 
+/* the session options rekordbox added DirectML to (the last few): the Demucs session's line says
+ * whether its options were among them, i.e. whether it runs on the GPU */
+static const OrtSessionOptions *dml_options[16];
+static rb_mutex dml_lock = RB_MUTEX_INIT;
+static void remember_dml(const OrtSessionOptions *o) {
+    static unsigned next;
+    rb_lock(&dml_lock);
+    dml_options[next++ % 16] = o;
+    rb_unlock(&dml_lock);
+}
+static int had_dml(const OrtSessionOptions *o) {
+    int r = 0;
+    rb_lock(&dml_lock);
+    for (int i = 0; i < 16; i++) r |= o && dml_options[i] == o;
+    rb_unlock(&dml_lock);
+    return r;
+}
+
 /* whether a model path names rekordbox's Demucs model: its file name is hdemucs.onnx, after a
  * '\' or a '/' (Demucs3.dll builds "<folder>/hdemucs.onnx"), whatever the case */
 static int is_demucs_path(const ORTCHAR_T *p) {
@@ -2456,7 +2474,8 @@ static OrtStatus *ORT_API_CALL hook_CreateSession(const OrtEnv *env, const ORTCH
     char id[65];
     if (rebuild) rebuilt_id(fp, id);
     else memcpy(id, fp, 65);
-    if (!st) logf_("Demucs session opened: model %.12s, %s%s%s", fp, how, cached ? "" : ", not cached",
+    if (!st) logf_("Demucs session opened: model %.12s, %s, %s%s%s", fp, how, had_dml(options) ? "on the GPU (DirectML)" : "on the CPU (rekordbox added no GPU provider)",
+                   cached ? "" : ", not cached",
                    !cached || !pioneer ? "" : rebuild ? ", rekordbox's own: stems rebuilt" : ", rekordbox's own: not cached here (rekordbox_model=0)");
     if (!cached) return st;
     rb_lock(&lock);
@@ -2794,7 +2813,9 @@ static OrtStatus *ORT_API_CALL hook_Run(OrtSession *s, const OrtRunOptions *ro, 
     for (int j = 0; j < nc; j++) free_summary(&cands[j]);
 
     /* 3. the model, then cache its stems and the chunk's summary in the background */
+    double t_run = rb_mono_seconds();
     OrtStatus *st = R->Run(s, ro, in_names, inputs, n_in, out_names, n_out, outputs);
+    t_run = rb_mono_seconds() - t_run;
     tensor tx, txt;
     free(ms); free(mm); free(desc);
     if (st || view(outputs[ix], &tx) || view(outputs[ixt], &txt) || txt.count != L * 8) {
@@ -2835,7 +2856,8 @@ static OrtStatus *ORT_API_CALL hook_Run(OrtSession *s, const OrtRunOptions *ro, 
     rb_lock(&lock);
     long long h = hits, nh = near_hits, m = ++misses;
     rb_unlock(&lock);
-    logf_("miss %.12s (%zu samples%s)  [%lld hits, %lld near, %lld misses]", key, L, rebuilt ? ", rebuilt" : "", h, nh, m);
+    logf_("miss %.12s (%zu samples%s, the model took %.1f s: %.2fx real time)  [%lld hits, %lld near, %lld misses]", key, L, rebuilt ? ", rebuilt" : "",
+          t_run, t_run > 0 ? (double)L / 44100.0 / t_run : 0.0, h, nh, m);
     if (!mixc || !kk || !mdl || !writer_admit(bytes)) {
         free(mixc); free(kk); free(mdl); free(pcm);
         return st;
@@ -2887,23 +2909,49 @@ static OrtStatus *missing(const char *what) {
            ? real_base->GetApi(ORT_API_VERSION)->CreateStatus(ORT_FAIL, what) : NULL;
 }
 
+/* the execution providers rekordbox asks for, logged once per kind and result (which device runs
+ * the models: the CPU, or a GPU through DirectML) */
+static void log_provider(const char *what, int device, OrtStatus *st) {
+    static rb_mutex m = RB_MUTEX_INIT;
+    static char said[8][96];
+    char line[96];
+    snprintf(line, sizeof line, "%s %d %s", what, device, st ? "failed" : "ok");
+    rb_lock(&m);
+    int seen = 0, i = 0;
+    for (; i < 8 && said[i][0]; i++) if (!strcmp(said[i], line)) seen = 1;
+    if (!seen && i < 8) memcpy(said[i], line, sizeof line);
+    rb_unlock(&m);
+    if (seen) return;
+    const char *err = st && R ? R->GetErrorMessage(st) : "";
+    if (device >= 0) logf_("rekordbox asked for the %s execution provider (device %d): %s%s%s", what, device, st ? "FAILED: " : "ok", err, "");
+    else logf_("rekordbox asked for the %s execution provider: %s%s", what, st ? "FAILED: " : "ok", err);
+}
+
 EXPORT OrtStatus *ORT_API_CALL OrtSessionOptionsAppendExecutionProvider_CPU(OrtSessionOptions *o, int use_arena) {
     static OrtStatus *(ORT_API_CALL *f)(OrtSessionOptions *, int);
     if (!f) f = (OrtStatus *(ORT_API_CALL *)(OrtSessionOptions *, int))(void *)real_proc("OrtSessionOptionsAppendExecutionProvider_CPU");
-    return f ? f(o, use_arena) : missing("rbstems bridge: real CPU provider missing");
+    OrtStatus *st = f ? f(o, use_arena) : missing("rbstems bridge: real CPU provider missing");
+    log_provider("CPU", -1, st);
+    return st;
 }
 
 EXPORT OrtStatus *ORT_API_CALL OrtSessionOptionsAppendExecutionProvider_DML(OrtSessionOptions *o, int device_id) {
     static OrtStatus *(ORT_API_CALL *f)(OrtSessionOptions *, int);
     if (!f) f = (OrtStatus *(ORT_API_CALL *)(OrtSessionOptions *, int))(void *)real_proc("OrtSessionOptionsAppendExecutionProvider_DML");
-    return f ? f(o, device_id) : missing("rbstems bridge: real DirectML provider missing");
+    OrtStatus *st = f ? f(o, device_id) : missing("rbstems bridge: real DirectML provider missing");
+    if (!st) remember_dml(o);
+    log_provider("DirectML (GPU)", device_id, st);
+    return st;
 }
 
 /* (OrtSessionOptions*, IDMLDevice*, ID3D12CommandQueue*): the COM pointers pass through untouched */
 EXPORT OrtStatus *ORT_API_CALL OrtSessionOptionsAppendExecutionProviderEx_DML(OrtSessionOptions *o, void *dml_device, void *queue) {
     static OrtStatus *(ORT_API_CALL *f)(OrtSessionOptions *, void *, void *);
     if (!f) f = (OrtStatus *(ORT_API_CALL *)(OrtSessionOptions *, void *, void *))(void *)real_proc("OrtSessionOptionsAppendExecutionProviderEx_DML");
-    return f ? f(o, dml_device, queue) : missing("rbstems bridge: real DirectML provider missing");
+    OrtStatus *st = f ? f(o, dml_device, queue) : missing("rbstems bridge: real DirectML provider missing");
+    if (!st) remember_dml(o);
+    log_provider("DirectML (GPU, rekordbox's own device)", -1, st);
+    return st;
 }
 
 /* the bridge's own module, so that open_real can tell itself from the real library */

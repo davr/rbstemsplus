@@ -437,14 +437,37 @@ static int rb_rename(const char *from, const char *to) {
     return 0;
 }
 
+/* A second handle to the file or folder h with other access: ReOpenFile, else (real Windows
+ * refuses ReOpenFile on handles NtCreateFile opened; wine allows it) the same object opened again by
+ * its final path, never following a link at its last component, and checked to be the same file
+ * (volume serial and file index). INVALID_HANDLE_VALUE with errno otherwise. */
+static HANDLE rb_reopen(HANDLE h, DWORD access, int dir) {
+    DWORD flags = dir ? FILE_FLAG_BACKUP_SEMANTICS : 0, share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    if (h == INVALID_HANDLE_VALUE) { errno = EBADF; return INVALID_HANDLE_VALUE; }
+    HANDLE w = ReOpenFile(h, access, share, flags);
+    if (w != INVALID_HANDLE_VALUE) return w;
+    wchar_t path[RB_PATH_MAX];
+    DWORD l = GetFinalPathNameByHandleW(h, path, RB_PATH_MAX, FILE_NAME_NORMALIZED | VOLUME_NAME_GUID);
+    if (!l || l >= RB_PATH_MAX) { errno = EIO; return INVALID_HANDLE_VALUE; }
+    w = CreateFileW(path, access, share, NULL, OPEN_EXISTING, flags | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (w == INVALID_HANDLE_VALUE) { errno = rb_errno_of(GetLastError()); return INVALID_HANDLE_VALUE; }
+    BY_HANDLE_FILE_INFORMATION a, b;
+    if (!GetFileInformationByHandle(h, &a) || !GetFileInformationByHandle(w, &b) || a.dwVolumeSerialNumber != b.dwVolumeSerialNumber
+        || a.nFileIndexHigh != b.nFileIndexHigh || a.nFileIndexLow != b.nFileIndexLow) {
+        CloseHandle(w);
+        errno = EXDEV;
+        return INVALID_HANDLE_VALUE;
+    }
+    return w;
+}
+
 /* the "last used" time: modification time now (futimes(fd, NULL)) */
 static int rb_futimes_now(int fd) {
-    HANDLE h = rb_h(fd), w;
+    HANDLE w;
     FILETIME now;
     GetSystemTimeAsFileTime(&now);
-    w = h == INVALID_HANDLE_VALUE ? INVALID_HANDLE_VALUE
-        : ReOpenFile(h, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0);
-    if (w == INVALID_HANDLE_VALUE) { errno = EACCES; return -1; }
+    w = rb_reopen(rb_h(fd), FILE_WRITE_ATTRIBUTES, 0);
+    if (w == INVALID_HANDLE_VALUE) return -1;
     BOOL ok = SetFileTime(w, NULL, NULL, &now);
     CloseHandle(w);
     return ok ? 0 : -1;
@@ -505,8 +528,8 @@ static int rb_dir_writable(int fd, int *err) {
     DWORD flags = 0;
     if (h == INVALID_HANDLE_VALUE) { *err = EBADF; return 0; }
     if (GetVolumeInformationByHandleW(h, NULL, 0, NULL, NULL, &flags, NULL, 0) && (flags & FILE_READ_ONLY_VOLUME)) { *err = EROFS; return 0; }
-    w = ReOpenFile(h, FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_FLAG_BACKUP_SEMANTICS);
-    if (w == INVALID_HANDLE_VALUE) { *err = rb_errno_of(GetLastError()); if (*err == EIO) *err = EACCES; return 0; }
+    w = rb_reopen(h, FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY, 1);
+    if (w == INVALID_HANDLE_VALUE) { *err = errno == EIO || errno == EXDEV ? EACCES : errno; return 0; }
     CloseHandle(w);
     return 1;
 }

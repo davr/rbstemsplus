@@ -57,13 +57,18 @@ jobs:
       - name: "the bridge's tests (native, the ACL check included)"
         shell: msys2 {0}
         run: bridge/win/tests/run.sh
+      # the rest runs whatever the bridge's tests said: each checks something else
       - uses: actions/setup-dotnet@v4
+        if: success() || failure()
         with: { dotnet-version: "8.0.x" }
       - name: "the app's tests (Windows: the ACL test included)"
+        if: success() || failure()
         run: dotnet test windows/RBStemsPlus.Tests
       - uses: actions/download-artifact@v4
+        if: success() || failure()
         with: { name: dist-test, path: dist-test }
       - name: "the install command, against the test build"
+        if: success() || failure()
         shell: pwsh
         run: |
           $server = Start-Process python -ArgumentList "-m","http.server","8765","--bind","127.0.0.1","--directory","dist-test" -PassThru -WindowStyle Hidden

@@ -163,8 +163,11 @@ else
     flac="$(find "$(cachef)" -name '*.flac' | head -1)"
     expect '[ -n "$flac" ] && [ -f "${flac%.flac}.desc" ] && [ -f "$(cachef)/$ours/$(basename "$(dirname "$flac")")/$(basename "$flac")" ]' \
       "the entry is <cache>\\<model>\\<xx>\\<key>.flac with its .desc"
+    touch -d '3 days ago' "$flac"
     out="$(outcome a d)"
     expect '[ "$out" = "a cache d cache " ]' "a new process finds them: got \"$out\""
+    # a hit stamps its entry "last used" (the limits evict the least recently used)
+    expect '[ "$(find "$(cachef)" -name "*.flac" -newermt "-1 hour" | wc -l | tr -d " ")" = 2 ]' "a hit marks its entry as used now (its modification time)"
     out="$(outcome b)"
     expect '[ "$out" = "b model " ]' "near hits off (the default): a shifted chunk runs the model: got \"$out\""
 
