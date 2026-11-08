@@ -13,7 +13,8 @@ public sealed class MainForm : Form, IAsk
     readonly Engine engine;
     readonly Light modelLight = new() { Text = "Demucs v4" }, cacheLight = new() { Text = "Stems Cache" };
     readonly Button installModel = Btn("Install Demucs v4"), installCache = Btn("Install Stems Cache"), reinstall = Btn("Reinstall"),
-                    uninstallModel = Btn("Uninstall Demucs v4"), uninstallCache = Btn("Uninstall Stems Cache"), uninstallAll = Btn("Uninstall RB Stems Plus Completely");
+                    uninstallModel = Btn("Uninstall Demucs v4"), uninstallCache = Btn("Uninstall Stems Cache"), uninstallAll = Btn("Uninstall RB Stems Plus Completely"),
+                    updateCache = Btn("Update Stems Cache");
     readonly Label statusLine = new() { AutoSize = false, Height = 64, Dock = DockStyle.Bottom, ForeColor = SystemColors.GrayText };
     readonly Label stepLine = new() { AutoSize = false, Height = 36, Dock = DockStyle.Bottom, Font = new Font(SystemFonts.MessageBoxFont ?? SystemFonts.DefaultFont, FontStyle.Bold), Visible = false };
     readonly ProgressBar progressBar = new() { Dock = DockStyle.Bottom, Height = 18, Visible = false, Minimum = 0, Maximum = 100, MarqueeAnimationSpeed = 30 };
@@ -58,7 +59,7 @@ public sealed class MainForm : Form, IAsk
         var lights = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(12, 10, 12, 0) };
         lights.Controls.AddRange(new Control[] { modelLight, cacheLight });
         var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, Dock = DockStyle.Fill, Padding = new Padding(12, 8, 8, 0), WrapContents = false };
-        buttons.Controls.AddRange(new Control[] { installModel, installCache, reinstall, uninstallModel, uninstallCache, uninstallAll });
+        buttons.Controls.AddRange(new Control[] { installModel, installCache, updateCache, reinstall, uninstallModel, uninstallCache, uninstallAll });
         var left = new Panel { Dock = DockStyle.Left, Width = 280 };
         left.Controls.Add(buttons);
         left.Controls.Add(stepLine);
@@ -84,6 +85,9 @@ public sealed class MainForm : Form, IAsk
         uninstallCache.Click += (_, _) => Run("uninstall-cache", "Uninstall Stems Cache", () =>
             Confirm("Uninstall Stems Cache?", "Stops saving stems and puts rekordbox's original files back. The stems already saved are kept.", "Uninstall") && engine.UninstallCache());
         uninstallAll.Click += (_, _) => UninstallEverything();
+        updateCache.Click += (_, _) => Run("update-cache", "Update Stems Cache", () =>
+            Confirm("Update Stems Cache?", "A newer Stems Cache is available. Updating it replaces the one in rekordbox's folder (Windows asks for permission). The stems already saved are kept.", "Update")
+            && engine.InstallCache());
         refreshTimer.Tick += (_, _) => { if (!busy) Refresh2(); CheckShowRequest(); };
         Shown += (_, _) => OnFirstShown();
         FormClosing += (s, e) => { if (busy) { e.Cancel = true; Tell("RB Stems Plus is busy", "Wait until the change is done."); } };
@@ -163,6 +167,9 @@ public sealed class MainForm : Form, IAsk
         bool missing = (chosen.Model && !model) || (chosen.Cache && !cache);
         installModel.Visible = !model; uninstallModel.Visible = model;
         installCache.Visible = !cache; uninstallCache.Visible = cache || Directory.Exists(p.RootDir);
+        bool cacheUpdate = cache && saved != null && rb != null && InstalledBridgeSha(rb) is { } have && have != saved.Bridge.Sha256;
+        updateCache.Visible = cacheUpdate;
+        updateCache.Enabled = !busy;
         reinstall.Visible = missing;
         installModel.Enabled = !busy && modelWhy == null;
         installCache.Enabled = !busy && cacheWhy == null;
@@ -175,9 +182,24 @@ public sealed class MainForm : Form, IAsk
             if (missing) lines.Add("rekordbox was updated: click Reinstall to turn back on what went missing.");
             if (chosen.Cache && cache && WatcherRegistration.Registered() && WatcherRegistration.Disabled())
                 lines.Add("Reinstall reminders are off. Turn on RB Stems Plus Watcher in Settings > Apps > Startup.");
+            if (cacheUpdate) lines.Add("A newer Stems Cache is available: click Update Stems Cache.");
             if (updateAvailable != null) lines.Add($"RB Stems Plus {updateAvailable.AppInfo.Version} is available (RB Stems Plus > Update RB Stems Plus).");
             statusLine.Text = string.Join("\n", lines);
         }
+    }
+
+    /// The SHA-256 of the bridge in rekordbox's folder, remembered per size and modification time.
+    string? bridgeShaKey, bridgeSha;
+    string? InstalledBridgeSha(RekordboxInstall rb)
+    {
+        try
+        {
+            var fi = new FileInfo(rb.Ort);
+            var key = $"{fi.FullName}|{fi.Length}|{fi.LastWriteTimeUtc.Ticks}";
+            if (key != bridgeShaKey) { bridgeSha = Files.Sha256(rb.Ort); bridgeShaKey = key; }
+            return bridgeSha;
+        }
+        catch { return null; }
     }
 
     void Run(string id, string label, Func<bool> work)

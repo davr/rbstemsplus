@@ -263,13 +263,22 @@ public static class Payload
 
     static byte[]? ReadBytes(string p) { try { return File.ReadAllBytes(p); } catch { return null; } }
 
+    static readonly object refusedGate = new();
+    static string? lastRefused;
+
     /// The last good payload, checked again now (null if none, or not valid any more).
     public static Manifest? Saved(PayloadFiles f, Action<string>? log = null)
     {
         var data = ReadBytes(f.Json);
         if (data == null) return null;
         var (m, why) = Check(data, ReadBytes(f.Signature), f.Keys, AcceptedFloor(f));
-        if (m == null) log?.Invoke("saved " + Consts.ManifestName + " ignored: " + Describe(why));
+        if (m == null)
+        {
+            // said once per reason and process: the window reads it every few seconds
+            var line = "saved " + Consts.ManifestName + " ignored: " + Describe(why) + " (the next download replaces it)";
+            lock (refusedGate) { if (line == lastRefused) return null; lastRefused = line; }
+            log?.Invoke(line);
+        }
         return m;
     }
 

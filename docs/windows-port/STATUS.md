@@ -120,6 +120,13 @@ Legend: [x] done · [~] in progress · [ ] to do · [!] blocked or needs the use
 - **Slow separation:** about 13 s per 11 s chunk, about 0.85x real time, apparently on the CPU. Analysis and plan are in [GPU.md](GPU.md). `windows-test-3` logs the providers and the speed.
 - **Bug found after the test:** on real Windows `ReOpenFile` refuses the bridge's handles. It is used for the hit's "last used" stamp, so the LRU and the 60-day cleanup didn't see use, and for the chosen location's write check. Fixed with `rb_reopen` (reopen by final path, then check it is the same file), plus a test that a hit refreshes the entry's time. The user needs `windows-test-3`, then Uninstall and Install Stems Cache, for the fixed bridge: the app doesn't yet offer bridge updates.
 
+## Second real-PC run (windows-test-3 app, 2026-11-08)
+- After a restart, the cached track came back as 30 hits again.
+- **Running `bootstrap.ps1` updates only the app, not the bridge in rekordbox's folder.** The log still showed test-1's bridge (b8bec9428c50: no provider or speed lines).
+  - Fixed in windows-test-4: an **Update Stems Cache** button appears when the payload's bridge sha differs from the installed one (the Mac app's "Stems Cache update").
+- **Log spam:** "saved payload-windows.json ignored", every 5 s. Each test build trusts only its own key, so test-1's saved payload fails test-3's check.
+  - Fixed: logged once per reason, and the app fetches a fresh payload at launch whenever the saved one doesn't verify, not just once a day.
+
 ## Verification still owed
 - [x] The bridge builds under mingw, and the export, ordinal and import checks pass.
 - [x] The harness passes under wine with the fake ORT, Microsoft's ORT 1.18.1 and **Pioneer's ORT 1.18.0**: 117 passed.

@@ -16,7 +16,9 @@ static class Updater
         {
             var last = File.Exists(p.LastUpdateCheckFile) ? File.GetLastWriteTimeUtc(p.LastUpdateCheckFile) : DateTime.MinValue;
             Manifest? m = null;
-            if (DateTime.UtcNow - last > TimeSpan.FromDays(1))
+            // once a day, and whenever there is no saved payload that verifies (another build's,
+            // or none yet): the window's lights and the update offers need one
+            if (DateTime.UtcNow - last > TimeSpan.FromDays(1) || Payload.Saved(new PayloadFiles(p)) == null)
             {
                 (_, m) = Payload.FetchChecked(p, new PayloadFiles(p), log.Write);
                 Files.TryWriteText(p.LastUpdateCheckFile, DateTime.UtcNow.ToString("o") + "\n");
