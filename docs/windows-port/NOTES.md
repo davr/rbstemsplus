@@ -59,3 +59,9 @@ Shared contracts the Windows side must keep:
 - **The real DLL's location:** `%ProgramData%\rbstemsplus\ort\onnxruntime.dll`. The installer must set ACLs there (ProgramData lets Users create files by default). The bridge checks the owner and DACL: only Administrators, SYSTEM or TrustedInstaller may write.
 - **Folder name:** a chosen location's folder is `RB Stems Plus Cache` on Windows. There is no `.noindex` suffix, and a folder at a drive's root is allowed.
 - **printf:** `__USE_MINGW_ANSI_STDIO=1` is needed for `%zu` and `%lld` with msvcrt.
+
+## Probe script (`scripts/windows-probe.ps1`)
+- Run it with `powershell -NoProfile -ExecutionPolicy Bypass -File .\windows-probe.ps1`. Add `-RekordboxDir "..."` if rekordbox isn't where the registry says, and `-Deep` for a slow scan of every DLL.
+- It saves `rbstemsplus-probe.txt` on the Desktop, with the user name replaced by `<user>`.
+- It parses PE export, import and delay-import tables in pure PowerShell, so it doesn't need Add-Type or C#. Windows PowerShell 5.1 can't do bitwise operations on UInt64 values with the top bit set, so a thunk's ordinal flag is read from its top byte instead.
+- It couldn't be test-run here: downloading pwsh was denied by the sandbox's auto-mode classifier.

@@ -7,12 +7,12 @@ Branch: `claude/affectionate-ride-f082bb`.
 Legend: [x] done · [~] in progress · [ ] to do · [!] blocked or needs the user
 
 ## Phase 0: discovery
-- [ ] `scripts/windows-probe.ps1`: a read-only report covering:
+- [x] `scripts/windows-probe.ps1`: a read-only report covering the items below. Written and pushed. PowerShell couldn't be installed here (the sandbox denied it), so the script was only reviewed by reading it for PS 5.1 pitfalls, never run.
   - the rekordbox install and its version;
   - the ORT DLLs, with each one's exports, sha256 and signer;
   - rekordbox.exe's imports;
   - the model folder and its hashes.
-- [!] The user runs the probe on a real Windows PC and sends back the output. That output fills `exports.def`, the default paths and the compat lists.
+- [!] **Waiting on the user:** run the probe on a real Windows PC and send back `rbstemsplus-probe.txt`. That output fills `exports.def`, the default paths and the compat lists.
 
 ## Phase 1: Windows bridge (`bridge/win/`)
 - [~] `win_compat.h`: Win32 stand-ins. Written, not yet compiled. It covers:
