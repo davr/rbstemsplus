@@ -21,7 +21,13 @@ command -v "$CC" > /dev/null || CC=gcc                    # MSYS2's MINGW64 shel
 passes=0 fails=0 skips=0
 
 pass() { passes=$((passes + 1)); }
-fail() { fails=$((fails + 1)); echo "FAIL $*"; }
+fail() {
+  fails=$((fails + 1)); echo "FAIL $*"
+  # the bridge's own words, for a failure seen only on another machine (CI)
+  if [ -n "${h:-}" ] && [ -f "$h/AppData/Local/rbstemsplus/Logs/bridge.log" ]; then
+    tail -n 6 "$h/AppData/Local/rbstemsplus/Logs/bridge.log" | sed 's/^/      bridge.log: /' | cut -c1-260
+  fi
+}
 skip() { skips=$((skips + 1)); echo "skip $*"; }
 expect() { if eval "$1"; then pass; else fail "$2"; fi; }
 
