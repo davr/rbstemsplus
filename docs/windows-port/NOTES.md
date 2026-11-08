@@ -40,12 +40,20 @@ Windows 11 Pro 26200, x64, PowerShell 5.1. The full report is not committed (it 
 - The model is at **`%APPDATA%\Pioneer\rekordbox6\models\demucs3_model\hdemucs.onnx`**, 335,027,281 bytes, sha256 **`435c987855f7ea74ff5f20090541748cbbce5a2e8e501d07b10f4e703453215a` = `PIONEER_0002`**, the same file as on macOS. `demucs3_ver.txt` holds `0002`, with a `demucs3_ver.bak` beside it. The same model means the same `mix`/`mag` to `x`/`xt` interface and the same rebuild maths.
 - Downloads come from `https://dl.rekordbox.com/application/models/demucs3/` (`demucs3_xxxx.zip`) and `.../models/stems/`.
 
+**Second probe run (2026-11-08)**
+- **ORT is 1.18.0.** That is the standalone version string in Pioneer's `onnxruntime.dll`, so the bridge's 1.18 OrtApi layout applies.
+- **How `Demucs3.dll` opens the model:**
+  - It exports `demucs3Initialize`, `demucs3PreOperation`, `demucs3OperationAt{Index,Once}{OtherWithBass,SeparatedBass}`, `demucs3PostOperation`, `demucs3Finalize`, `demucs3CancelOperation` and `demucs3IsInitialized`.
+  - Its strings include `"/hdemucs.onnx"` (a **forward slash**), `"mix"`, `"mag"`, `"xt"`, `"./stft_model"` and `"./istft_model"`. It imports `MultiByteToWideChar`.
+  - So it builds `<model dir>/hdemucs.onnx`, widens it and calls **CreateSession by path**. The bridge matches the suffix `\hdemucs.onnx` or `/hdemucs.onnx`, ignoring case, and hashes the file. A CreateSessionFromArray hook isn't needed.
+- `Spleeter.dll` is TensorFlow only (no ORT), so it is irrelevant.
+- `Demucs3.dll` was built with MSVC (`...\Modules\Separator\Demucs3\build\win\x64\Release\Demucs3.pdb`). It imports ORT ordinals 1 and 4 only.
+
 **Still unknown**
-- Whether `Demucs3.dll` opens the model by path (CreateSession) or from memory (CreateSessionFromArray). The Windows bridge hooks **both**: a session from an array is identified by the sha256 of its bytes.
 - Whether rekordbox checks the signatures of its own DLLs. Only a real test will show.
 - Whether rekordbox appends the DML execution provider to the Demucs session. Our model may fall back to CPU for ops DML doesn't support.
 
-**Compat list** for Windows to start with: rekordbox `7.2.14` (the user's version), ORT prefix `1.18.` (to be confirmed), STEMS Engine `0002`.
+**Compat list** for Windows to start with: rekordbox `7.2.14` (the user's version), ORT prefix `1.18.` (confirmed: 1.18.0), STEMS Engine `0002`.
 
 ## Stock ONNX Runtime 1.18.1 for win-x64 (verified)
 - `onnxruntime-win-x64-1.18.1.zip` from microsoft/onnxruntime releases. A copy is in `build/ort/` (gitignored).

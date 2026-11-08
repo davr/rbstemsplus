@@ -14,7 +14,7 @@ Legend: [x] done · [~] in progress · [ ] to do · [!] blocked or needs the use
   - the model folder and its hashes.
 - [x] First probe run received (rekordbox 7.2.14); findings are in NOTES.md.
 - [x] Probe updated: reads ORT's version string from the DLL, scans `Demucs3.dll`/`Spleeter.dll` strings, and fixes the process-modules error.
-- [!] **Waiting on the user:** re-run the updated probe (`-RekordboxDir "C:\Program Files\rekordbox\rekordbox 7.2.14"`) to confirm the ORT version and how `Demucs3.dll` names the model. That output fills `exports.def`, the default paths and the compat lists.
+- [x] Second probe run: ORT **1.18.0**, and `Demucs3.dll` opens `<dir>/hdemucs.onnx` with CreateSession. **Phase 0 is done.** That output fills `exports.def`, the default paths and the compat lists.
 
 ## Phase 1: Windows bridge (`bridge/win/`)
 - [~] `win_compat.h`: Win32 stand-ins. Written, not yet compiled. It covers:
@@ -44,7 +44,7 @@ Legend: [x] done · [~] in progress · [ ] to do · [!] blocked or needs the use
   - `…_CPU` @3
   - `…_DML` @4
   - `rbstems_marker` @5 or higher
-- [ ] Hook `CreateSessionFromArray` too (the sha256 of the bytes picks the model), in case `Demucs3.dll` loads the model from memory.
+- [x] ~~Hook CreateSessionFromArray~~: not needed (the second probe showed CreateSession by path).
 - [ ] `bridge/win/build.sh`:
   - libFLAC for the mingw host;
   - checks that the exports and imports match;
