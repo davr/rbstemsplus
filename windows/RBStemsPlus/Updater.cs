@@ -29,11 +29,13 @@ static class Updater
     }
 
     /// The new exe, unpacked and checked, or null.
-    public static string? Download(AppPaths p, Manifest m, Log log, Action<string> status)
+    public static string? Download(AppPaths p, Manifest m, Log log, Action<string> status, Action<int?>? progress = null)
     {
         var dir = Path.Combine(p.UpdateDir, m.AppInfo.Version);
         var zip = Path.Combine(dir, m.AppInfo.Zip);
-        if (Payload.Asset(p, m.AppInfo.Zip, zip, m.AppInfo.Sha256, null, "RB Stems Plus " + m.AppInfo.Version, status, log.Write) != Payload.Fetched.Ok) return null;
+        if (Payload.Asset(p, m.AppInfo.Zip, zip, m.AppInfo.Sha256, null, "RB Stems Plus " + m.AppInfo.Version, status, log.Write, progress: progress) != Payload.Fetched.Ok) return null;
+        status("Unpacking the update…");
+        progress?.Invoke(null);
         var outDir = Path.Combine(dir, "app");
         try
         {

@@ -11,7 +11,7 @@
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
-$ProgressPreference = 'SilentlyContinue'
+$ProgressPreference = 'Continue'
 
 # written by scripts/build-windows.sh: the base64 DER of each trusted P-256 public key (space-
 # separated), the oldest payload version this installer accepts, and where it downloads from
@@ -29,10 +29,58 @@ if (-not $SigningKeys) { Fail "this copy of the installer has no signing keys (u
 if (-not [Environment]::Is64BitOperatingSystem) { Fail "RB Stems Plus needs 64-bit Windows." }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.ServicePointManager]::SecurityProtocol
 
-function Get-Bytes([string]$name) {
+$script:StepCount = 7
+$script:Step = 0
+function Step([string]$what) {
+    $script:Step++
+    Write-Host ("[{0}/{1}] {2}" -f $script:Step, $script:StepCount, $what) -ForegroundColor Cyan
+}
+function Done([string]$what) { Write-Host "      $what" -ForegroundColor DarkGray }
+
+function Format-Size([double]$bytes) {
+    if ($bytes -ge 1MB) { return ("{0:N1} MB" -f ($bytes / 1MB)) }
+    if ($bytes -ge 1KB) { return ("{0:N0} KB" -f ($bytes / 1KB)) }
+    return ("{0} bytes" -f $bytes)
+}
+
+# Downloads a release file with a progress bar (size, percent, speed); its bytes.
+function Get-Bytes([string]$name, [string]$what) {
     $u = [Uri]($DownloadBase + $name)
-    $wc = New-Object Net.WebClient
-    try { return $wc.DownloadData($u) } catch { Fail "couldn't download $name. Check your internet connection and try again." }
+    try {
+        $req = [Net.HttpWebRequest]::Create($u)
+        $req.UserAgent = "RB Stems Plus installer"
+        $req.AllowAutoRedirect = $true
+        $resp = $req.GetResponse()
+        $total = $resp.ContentLength
+        $src = $resp.GetResponseStream()
+        $buf = New-Object byte[] 262144
+        $out = New-Object IO.MemoryStream
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $last = -1
+        while (($n = $src.Read($buf, 0, $buf.Length)) -gt 0) {
+            $out.Write($buf, 0, $n)
+            $got = $out.Length
+            $secs = [Math]::Max($sw.Elapsed.TotalSeconds, 0.001)
+            $speed = (Format-Size ($got / $secs)) + "/s"
+            if ($total -gt 0) {
+                $pct = [int](100 * $got / $total)
+                if ($pct -ne $last) {
+                    Write-Progress -Activity "Downloading $what" -Status ("{0} of {1}, {2}%, {3}" -f (Format-Size $got), (Format-Size $total), $pct, $speed) -PercentComplete $pct
+                    $last = $pct
+                }
+            } else {
+                Write-Progress -Activity "Downloading $what" -Status ("{0}, {1}" -f (Format-Size $got), $speed)
+            }
+        }
+        $src.Close(); $resp.Close()
+        Write-Progress -Activity "Downloading $what" -Completed
+        $bytes = $out.ToArray()
+        Done ("downloaded {0} ({1})" -f $name, (Format-Size $bytes.Length))
+        return ,$bytes
+    } catch {
+        Write-Progress -Activity "Downloading $what" -Completed
+        Fail "couldn't download $name ($($_.Exception.Message)). Check your internet connection and try again."
+    }
 }
 
 # ---------------------------------------------------------------- the signature (ECDSA P-256, SHA-256)
@@ -127,9 +175,15 @@ function Get-Sha256([byte[]]$data) {
 
 # ---------------------------------------------------------------- install
 
-Write-Host "Downloading RB Stems Plus…"
-$jsonBytes = Get-Bytes "payload-windows.json"
-$sigBytes = Get-Bytes "payload-windows.json.sig"
+Write-Host ""
+Write-Host "RB Stems Plus for Windows: installing from $DownloadBase" -ForegroundColor White
+Write-Host ""
+
+Step "Downloading the release description"
+$jsonBytes = Get-Bytes "payload-windows.json" "the release description"
+$sigBytes = Get-Bytes "payload-windows.json.sig" "its signature"
+
+Step "Checking the release's signature"
 if (-not (Test-Signature $jsonBytes $sigBytes)) { Fail "the download couldn't be verified (its signature doesn't match RB Stems Plus's keys)." }
 $jsonText = [Text.Encoding]::UTF8.GetString($jsonBytes)
 if (-not (Test-PlainJsonKeys $jsonText)) { Fail "the release description isn't valid." }
@@ -137,10 +191,16 @@ $payload = $jsonText | ConvertFrom-Json
 if ($PayloadMinimum -and (Compare-Version $payload.payload_version $PayloadMinimum) -lt 0) { Fail "the release is older than this installer." }
 $zipName = $payload.app.zip
 if ($zipName -notmatch '^[A-Za-z0-9._-]+$') { Fail "the release description isn't valid." }
-$zipBytes = Get-Bytes $zipName
-if ((Get-Sha256 $zipBytes) -ne $payload.app.sha256) { Fail "the app didn't download correctly (its checksum doesn't match)." }
+Done ("signature valid: RB Stems Plus {0}" -f $payload.app.version)
 
-Write-Host "Installing RB Stems Plus in your Programs folder…"
+Step ("Downloading RB Stems Plus {0}" -f $payload.app.version)
+$zipBytes = Get-Bytes $zipName "RB Stems Plus"
+
+Step "Checking the download"
+if ((Get-Sha256 $zipBytes) -ne $payload.app.sha256) { Fail "the app didn't download correctly (its checksum doesn't match)." }
+Done "checksum matches the signed release"
+
+Step "Unpacking"
 $dest = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) "Programs\RB Stems Plus"
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("rbstemsplus-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
@@ -148,9 +208,13 @@ try {
     $zipPath = Join-Path $tmp $zipName
     [IO.File]::WriteAllBytes($zipPath, $zipBytes)
     Add-Type -AssemblyName System.IO.Compression.FileSystem
+    Write-Progress -Activity "Unpacking RB Stems Plus" -Status "please wait" -PercentComplete 50
     [IO.Compression.ZipFile]::ExtractToDirectory($zipPath, (Join-Path $tmp "app"))
+    Write-Progress -Activity "Unpacking RB Stems Plus" -Completed
     $newExe = Join-Path $tmp "app\RBStemsPlus.exe"
     if (-not (Test-Path $newExe)) { Fail "the app's zip has no RBStemsPlus.exe." }
+    Done "unpacked"
+    Step "Installing in $dest"
     Get-Process -Name RBStemsPlus -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($dest) -and $_.MainWindowHandle -ne 0 } | ForEach-Object { $_.CloseMainWindow() | Out-Null }
     Start-Sleep -Milliseconds 500
     New-Item -ItemType Directory -Force -Path $dest | Out-Null
@@ -161,9 +225,12 @@ try {
     $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) "RB Stems Plus.lnk"
     $sh = New-Object -ComObject WScript.Shell
     $s = $sh.CreateShortcut($lnk); $s.TargetPath = $exe; $s.WorkingDirectory = $dest; $s.Description = "RB Stems Plus"; $s.Save()
+    Done "installed RBStemsPlus.exe"
+    Done "added RB Stems Plus to the Start menu"
 } finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
+Step "Opening RB Stems Plus"
 Start-Process -FilePath $exe
 Write-Host ""
 Write-Host "RB Stems Plus is in your Start menu and open. You can close this window." -ForegroundColor Green

@@ -23,8 +23,38 @@ public sealed class Engine
     readonly Log log;
     readonly Action<string> status;
     readonly IAsk ask;
+    /// The progress bar: a percent, null for "working" (no percentage), Hidden to hide it.
+    readonly Action<int?> progress;
+    public const int Hidden = -1;
+    /// The step label ("Step 2 of 4: …"); "" hides it.
+    readonly Action<string> stepLabel;
+    int stepNo, stepCount;
 
-    public Engine(AppPaths p, Log log, Action<string> status, IAsk ask) { this.p = p; this.log = log; this.status = status; this.ask = ask; }
+    public Engine(AppPaths p, Log log, Action<string> status, IAsk ask, Action<int?>? progress = null, Action<string>? stepLabel = null)
+    {
+        this.p = p; this.log = log; this.status = status; this.ask = ask;
+        this.progress = progress ?? (_ => { });
+        this.stepLabel = stepLabel ?? (_ => { });
+    }
+
+    /// Starts a numbered list of steps for the action under way (`count` of them).
+    void Steps(int count) { stepNo = 0; stepCount = count; }
+    void Step(string what)
+    {
+        stepNo++;
+        var line = stepCount > 1 ? $"Step {Math.Min(stepNo, stepCount)} of {stepCount}: {what}" : what;
+        stepLabel(line);
+        log.Write("  " + line);
+    }
+    public void EndSteps() { stepLabel(""); progress(Hidden); stepCount = 0; }
+
+    Models ModelsFor(Manifest? m)
+    {
+        var models = Models.ForAccount(p, m, log.Write);
+        models.Progress = progress;
+        models.Status = status;
+        return models;
+    }
 
     PayloadFiles PF => new(p);
     public Manifest? Saved => Payload.Saved(PF, log.Write);
@@ -33,7 +63,9 @@ public sealed class Engine
     /// The payload for an install: downloaded now, or the saved one (offline) if its files are here.
     Manifest? PayloadForInstall(bool needBridge, bool needModel)
     {
+        Step("Checking for the latest files");
         status("Checking for the latest files…");
+        progress(null);
         var (r, m) = Payload.FetchChecked(p, PF, log.Write);
         if (r == Payload.Fetch.Unverified) { ask.Tell("Download failed", "The download couldn't be verified. Nothing was changed. Try again later."); return null; }
         if (m != null) return m;
@@ -52,12 +84,14 @@ public sealed class Engine
     {
         if (model)
         {
-            var r = Payload.Asset(p, m.Model.File, m.ModelPath(p), m.Model.Sha256, m.Model.Size, "the Demucs v4 model", status, log.Write);
+            Step("Downloading the Demucs v4 model (about 300 MB)");
+            var r = Payload.Asset(p, m.Model.File, m.ModelPath(p), m.Model.Sha256, m.Model.Size, "the Demucs v4 model", status, log.Write, progress: progress);
             if (r != Payload.Fetched.Ok) { TellFetch(r); return false; }
         }
         if (bridge)
         {
-            var r = Payload.Asset(p, m.Bridge.File, m.BridgePath(p), m.Bridge.Sha256, null, "Stems Cache", status, log.Write);
+            Step("Downloading Stems Cache");
+            var r = Payload.Asset(p, m.Bridge.File, m.BridgePath(p), m.Bridge.Sha256, null, "Stems Cache", status, log.Write, progress: progress);
             if (r != Payload.Fetched.Ok) { TellFetch(r); return false; }
         }
         return true;
@@ -72,6 +106,7 @@ public sealed class Engine
 
     bool WaitForRekordboxClosed(string what)
     {
+        progress(null);
         while (Rekordbox.Running() || Rekordbox.PioneerUpdating())
         {
             if (!ask.RetryWhileRekordboxOpen(what)) { log.Write($"{what}: cancelled (rekordbox open)"); return false; }
@@ -85,11 +120,13 @@ public sealed class Engine
     {
         var rb = Rekordbox.Current();
         if (Compat.StemsPlusBlocked(p, CompatList, rb) is { } why) { ask.Tell("Demucs v4 can't be installed", why); return false; }
+        if (given == null) Steps(3);
         var m = given ?? PayloadForInstall(needBridge: false, needModel: true);
         if (m == null || !Fetch(m, bridge: false, model: true)) return false;
         if (!WaitForRekordboxClosed("Install Demucs v4")) return false;
+        Step("Installing Demucs v4 in rekordbox");
         status("Installing Demucs v4…");
-        var r = Models.ForAccount(p, m, log.Write).InstallOurs(m.ModelPath(p), m.Model.Sha256);
+        var r = ModelsFor(m).InstallOurs(m.ModelPath(p), m.Model.Sha256);
         if (!r.Ok) { ask.Tell("Demucs v4 wasn't installed", $"Demucs v4 couldn't be installed. {r.Message} Nothing was changed."); return false; }
         var c = State.ReadChosen(p);
         State.SetChosen(p, true, c.Cache);
@@ -100,8 +137,9 @@ public sealed class Engine
     public bool UninstallModel()
     {
         if (!WaitForRekordboxClosed("Uninstall Demucs v4")) return false;
-        status("Putting rekordbox's own stems model back…");
-        var r = Models.ForAccount(p, Saved, log.Write).Restore();
+        Steps(1);
+        Step("Putting rekordbox's own stems model back");
+        var r = ModelsFor(Saved).Restore();
         if (!r.Ok)
         {
             ask.Tell("Demucs v4 wasn't removed", r.NoSpace ? $"Demucs v4 couldn't be removed. {r.Message} Free up some space and try again."
@@ -119,9 +157,12 @@ public sealed class Engine
     {
         var rb = Rekordbox.Current();
         if (Compat.StemsCacheBlocked(p, CompatList, rb) is { } why) { ask.Tell("Stems Cache can't be installed", why); return false; }
+        if (given == null) Steps(3);
         var m = given ?? PayloadForInstall(needBridge: true, needModel: false);
         if (m == null || !Fetch(m, bridge: true, model: false)) return false;
         if (!WaitForRekordboxClosed("Install Stems Cache")) return false;
+        Step("Installing Stems Cache in rekordbox (Windows asks for permission)");
+        progress(null);
         status("Installing Stems Cache… (Windows asks for permission)");
         var r = RunElevated("install-cache", rb!.Dir, rb.Version, m.BridgePath(p), m.Bridge.Sha256);
         if (r != AdminExit.Ok) { ask.Tell("Stems Cache wasn't installed", Elevated.Describe(r)); return false; }
@@ -139,6 +180,8 @@ public sealed class Engine
     public bool UninstallCache()
     {
         if (!WaitForRekordboxClosed("Uninstall Stems Cache")) return false;
+        Steps(1);
+        Step("Putting rekordbox's original files back (Windows asks for permission)");
         status("Uninstalling Stems Cache… (Windows asks for permission)");
         var r = RunElevated("uninstall-cache");
         if (r != AdminExit.Ok) { ask.Tell("Stems Cache wasn't removed", Elevated.Describe(r)); return false; }
@@ -154,6 +197,7 @@ public sealed class Engine
         var rb = Rekordbox.Current();
         bool needModel = c.Model && !Rekordbox.StemsPlusPresent(p, Saved), needCache = c.Cache && !Rekordbox.StemsCachePresent(rb);
         if (!needModel && !needCache) { log.Write("reinstall: nothing missing"); return true; }
+        Steps(1 + (needModel ? 2 : 0) + (needCache ? 2 : 0));
         var m = PayloadForInstall(needCache, needModel);
         if (m == null) return false;
         bool ok = true;
@@ -167,14 +211,17 @@ public sealed class Engine
     {
         if (!WaitForRekordboxClosed("Uninstall RB Stems Plus")) return false;
         var rb = Rekordbox.Current();
+        Steps(3);
+        Step("Removing Stems Cache (Windows asks for permission)");
         if (Rekordbox.StemsCachePresent(rb) || Directory.Exists(p.RootDir))
         {
+            progress(null);
             status("Uninstalling Stems Cache… (Windows asks for permission)");
             var r = RunElevated("uninstall-cache");
             if (r != AdminExit.Ok) { ask.Tell("RB Stems Plus wasn't removed", "Stems Cache couldn't be removed, so nothing else was deleted. " + Elevated.Describe(r)); return false; }
         }
-        status("Putting rekordbox's own stems model back…");
-        var models = Models.ForAccount(p, Saved, log.Write);
+        Step("Putting rekordbox's own stems model back");
+        var models = ModelsFor(Saved);
         var restore = models.Restore();
         if (!restore.Ok)
         {
@@ -182,6 +229,8 @@ public sealed class Engine
                              + p.OriginalsDir + ".", "Remove RB Stems Plus Anyway")) return false;
         }
         WatcherRegistration.Unregister(log.Write);
+        Step("Deleting saved stems and settings");
+        progress(null);
         status("Deleting saved stems and settings…");
         CacheLocation.ClearEntries(p.DefaultCacheDir, log.Write);
         try { if (Directory.Exists(p.DefaultCacheDir)) Directory.Delete(p.DefaultCacheDir, true); } catch { }

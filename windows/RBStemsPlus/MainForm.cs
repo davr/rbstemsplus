@@ -15,6 +15,8 @@ public sealed class MainForm : Form, IAsk
     readonly Button installModel = Btn("Install Demucs v4"), installCache = Btn("Install Stems Cache"), reinstall = Btn("Reinstall"),
                     uninstallModel = Btn("Uninstall Demucs v4"), uninstallCache = Btn("Uninstall Stems Cache"), uninstallAll = Btn("Uninstall RB Stems Plus Completely");
     readonly Label statusLine = new() { AutoSize = false, Height = 64, Dock = DockStyle.Bottom, ForeColor = SystemColors.GrayText };
+    readonly Label stepLine = new() { AutoSize = false, Height = 36, Dock = DockStyle.Bottom, Font = new Font(SystemFonts.MessageBoxFont ?? SystemFonts.DefaultFont, FontStyle.Bold), Visible = false };
+    readonly ProgressBar progressBar = new() { Dock = DockStyle.Bottom, Height = 18, Visible = false, Minimum = 0, Maximum = 100, MarqueeAnimationSpeed = 30 };
     readonly TextBox logBox = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, Font = new Font(FontFamily.GenericMonospace, 8.5f), BackColor = SystemColors.Window };
     readonly ToolTip tips = new();
     readonly System.Windows.Forms.Timer refreshTimer = new() { Interval = 5000 };
@@ -29,7 +31,8 @@ public sealed class MainForm : Form, IAsk
         this.p = p;
         log = new Log(p.AppLog);
         log.Echo = line => { if (IsHandleCreated) BeginInvoke(() => AppendLog(line)); };
-        engine = new Engine(p, log, s => BeginInvoke(() => statusLine.Text = s), this);
+        engine = new Engine(p, log, s => BeginInvoke(() => statusLine.Text = s), this,
+                            pct => BeginInvoke(() => ShowProgress(pct)), s => BeginInvoke(() => { stepLine.Text = s; stepLine.Visible = s.Length > 0; }));
         Text = "RB Stems Plus" + Consts.BuildNote;
         ClientSize = new Size(900, 520);
         MinimumSize = new Size(760, 440);
@@ -58,8 +61,12 @@ public sealed class MainForm : Form, IAsk
         buttons.Controls.AddRange(new Control[] { installModel, installCache, reinstall, uninstallModel, uninstallCache, uninstallAll });
         var left = new Panel { Dock = DockStyle.Left, Width = 280 };
         left.Controls.Add(buttons);
+        left.Controls.Add(stepLine);
+        left.Controls.Add(progressBar);
         left.Controls.Add(statusLine);
         statusLine.Padding = new Padding(12, 0, 8, 8);
+        stepLine.Padding = new Padding(12, 6, 8, 0);
+        progressBar.Margin = new Padding(12, 0, 12, 0);
         var right = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4, 8, 12, 12) };
         right.Controls.Add(logBox);
         Controls.Add(right);
@@ -80,6 +87,19 @@ public sealed class MainForm : Form, IAsk
         refreshTimer.Tick += (_, _) => { if (!busy) Refresh2(); CheckShowRequest(); };
         Shown += (_, _) => OnFirstShown();
         FormClosing += (s, e) => { if (busy) { e.Cancel = true; Tell("RB Stems Plus is busy", "Wait until the change is done."); } };
+    }
+
+    /// The progress bar: a percent, null for "working" (a moving bar), Engine.Hidden to hide it.
+    void ShowProgress(int? pct)
+    {
+        if (pct == Engine.Hidden) { progressBar.Visible = false; return; }
+        progressBar.Visible = true;
+        if (pct is { } v)
+        {
+            if (progressBar.Style != ProgressBarStyle.Continuous) progressBar.Style = ProgressBarStyle.Continuous;
+            progressBar.Value = Math.Clamp(v, 0, 100);
+        }
+        else if (progressBar.Style != ProgressBarStyle.Marquee) progressBar.Style = ProgressBarStyle.Marquee;
     }
 
     void AppendLog(string line)
@@ -175,6 +195,7 @@ public sealed class MainForm : Form, IAsk
             finally
             {
                 State.SetBusy(p, null);
+                engine.EndSteps();
                 BeginInvoke(() => { busy = false; statusLine.Text = ""; Refresh2(); log.Write($"--- {label}: {(ok ? "done" : "not done")}"); });
             }
         });
@@ -211,7 +232,7 @@ public sealed class MainForm : Form, IAsk
         if (updateAvailable is not { } m) return;
         Run("update", "Update RB Stems Plus", () =>
         {
-            var exe = Updater.Download(p, m, log, s => BeginInvoke(() => statusLine.Text = s));
+            var exe = Updater.Download(p, m, log, s => BeginInvoke(() => statusLine.Text = s), pct => BeginInvoke(() => ShowProgress(pct)));
             if (exe == null) { BeginInvoke(() => Tell("Update failed", "The update couldn't be downloaded or didn't verify. RB Stems Plus stays as it is.")); return false; }
             BeginInvoke(() => Updater.SwapAndRestart(exe, log));
             return true;

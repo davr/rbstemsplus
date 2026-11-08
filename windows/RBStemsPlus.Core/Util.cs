@@ -62,15 +62,24 @@ public static class Files
 
     public static bool IsSha256(string s) => s.Length == 64 && s.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
 
-    /// Copies with a flush to the disk; null when done, else why not.
-    public static string? Copy(string from, string to)
+    /// Copies with a flush to the disk; null when done, else why not. `progress` gets the percent copied.
+    public static string? Copy(string from, string to, Action<int>? progress = null)
     {
         try
         {
             using (var src = new FileStream(from, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 20))
             using (var dst = new FileStream(to, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 20))
             {
-                src.CopyTo(dst, 1 << 20);
+                var buf = new byte[1 << 20];
+                long total = src.Length, done = 0;
+                int n, last = -1;
+                while ((n = src.Read(buf, 0, buf.Length)) > 0)
+                {
+                    dst.Write(buf, 0, n);
+                    done += n;
+                    int pct = total > 0 ? (int)(done * 100 / total) : 100;
+                    if (progress != null && pct != last) { progress(pct); last = pct; }
+                }
                 dst.Flush(true);
             }
             return null;

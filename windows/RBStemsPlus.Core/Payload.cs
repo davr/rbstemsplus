@@ -355,13 +355,16 @@ public static class Payload
     /// Makes sure `dest` holds the release asset `name` with this sha256 (and size): kept if it is
     /// there, reused from another payload folder, or downloaded (resuming a partial file) and
     /// verified; a damaged download is fetched once more from scratch, then refused.
+    /// `progress`: the percent downloaded, or null while a file is checked (no percentage).
     public static Fetched Asset(AppPaths p, string name, string dest, string sha, long? size, string what,
-                                Action<string> status, Action<string> log, string? baseUrl = null)
+                                Action<string> status, Action<string> log, string? baseUrl = null, Action<int?>? progress = null)
     {
+        progress ??= _ => { };
         baseUrl ??= Consts.DownloadBase;
         Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
         status($"Checking {what}…");
-        if (Files.Verified(dest, sha, size)) return Fetched.Ok;
+        progress(null);
+        if (Files.Verified(dest, sha, size)) { log($"{name}: already downloaded and verified"); return Fetched.Ok; }
         Files.Remove(dest);
         try
         {
@@ -383,6 +386,7 @@ public static class Payload
             if (!complete)
             {
                 status($"Downloading {what}…");
+                progress(size is > 0 ? (int)(have * 100 / size.Value) : null);
                 try
                 {
                     var req = new HttpRequestMessage(HttpMethod.Get, baseUrl + name);
@@ -398,15 +402,25 @@ public static class Payload
                     using var dst = new FileStream(part, resume ? FileMode.Append : FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20);
                     var buf = new byte[1 << 20];
                     long got = have;
+                    long total = size ?? (resp.Content.Headers.ContentLength is { } cl ? have + cl : 0);
                     var lastShown = DateTime.MinValue;
+                    var started = DateTime.UtcNow;
                     int n;
                     while ((n = src.Read(buf, 0, buf.Length)) > 0)
                     {
                         dst.Write(buf, 0, n);
                         got += n;
-                        if (size is > 0 && DateTime.UtcNow - lastShown > TimeSpan.FromMilliseconds(300))
+                        if (DateTime.UtcNow - lastShown > TimeSpan.FromMilliseconds(250))
                         {
-                            status($"Downloading {what}… {Math.Min(99, got * 100 / size.Value)}%");
+                            double secs = Math.Max(0.001, (DateTime.UtcNow - started).TotalSeconds);
+                            var speed = $"{(got - have) / secs / 1_048_576:0.0} MB/s";
+                            if (total > 0)
+                            {
+                                int pct = (int)Math.Min(99, got * 100 / total);
+                                status($"Downloading {what}… {got / 1_048_576.0:0} of {total / 1_048_576.0:0} MB ({pct}%, {speed})");
+                                progress(pct);
+                            }
+                            else { status($"Downloading {what}… {got / 1_048_576.0:0} MB ({speed})"); progress(null); }
                             lastShown = DateTime.UtcNow;
                         }
                     }
@@ -421,6 +435,7 @@ public static class Payload
                 }
             }
             status($"Checking {what}…");
+            progress(null);
             if (Files.Verified(part, sha, size))
             {
                 try { File.Move(part, dest, true); log($"{name}: downloaded and verified"); return Fetched.Ok; } catch { }

@@ -16,6 +16,9 @@ public sealed class Models
     public Action<string> Log = _ => { };
     /// Called right before rekordbox's model is checked again and replaced (the tests change it there).
     public Action WillReplace = () => { };
+    /// The percent of a model copied, or null while models are checked (no percentage); and what is happening.
+    public Action<int?> Progress = _ => { };
+    public Action<string> Status = _ => { };
 
     public Models(string dir, string originals, IEnumerable<string> ours) { Dir = dir; Originals = originals; Ours = ours.ToHashSet(); }
 
@@ -50,7 +53,9 @@ public sealed class Models
         var e = Engine;
         var part = Saved(sha) + ".part";
         Files.Remove(part);
-        var err = Files.Copy(Model, part);
+        Status("Saving a copy of rekordbox's own stems model…");
+        var err = Files.Copy(Model, part, pct => Progress(pct));
+        Progress(null);
         if (err != null || Files.Sha256(part) != sha)
         {
             Files.Remove(part);
@@ -138,7 +143,9 @@ public sealed class Models
         foreach (var o in candidates)
         {
             Files.Remove(RestoreTemp);
-            var err = Files.Copy(Saved(o.Sha), RestoreTemp);
+            Status("Putting rekordbox's own stems model back…");
+            var err = Files.Copy(Saved(o.Sha), RestoreTemp, pct => Progress(pct));
+            Progress(null);
             if (err != null)
             {
                 Files.Remove(RestoreTemp);
@@ -161,6 +168,8 @@ public sealed class Models
     {
         bool present = File.Exists(Model);
         if (present && Files.IsReparsePoint(Model)) return Fail("rekordbox's stems model isn't a file.");
+        Status("Checking rekordbox's stems model…");
+        Progress(null);
         var live = present ? Files.Sha256(Model) : null;
         if (present && live == null) return Fail("rekordbox's stems model can't be read.");
         if (live != null && !Ours.Contains(live))
@@ -173,7 +182,10 @@ public sealed class Models
         else if (!present) Log("Pioneer's model: none to save");
         Directory.CreateDirectory(Dir);
         Files.Remove(NewTemp);
-        var err = Files.Copy(source, NewTemp);
+        Status("Copying the Demucs v4 model into rekordbox's model folder…");
+        var err = Files.Copy(source, NewTemp, pct => Progress(pct));
+        Progress(null);
+        Status("Checking the copy…");
         if (err != null)
         {
             Files.Remove(NewTemp);
