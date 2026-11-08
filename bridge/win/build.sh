@@ -7,6 +7,7 @@
 #   bridge/win/build.sh --test REAL_PATH OUT  for bridge/win/tests only: the bridge loads the real
 #                                             library from REAL_PATH (a Windows path) instead of
 #                                             %ProgramData%\rbstemsplus\ort\onnxruntime.dll
+#   bridge/win/build.sh --bench OUT           bridge/win/bench/rbsp-bench.c (a diagnostic tool) into OUT/rbsp-bench.exe
 #   bridge/win/build.sh --unit OUT            bridge/win/tests/unit.c (the bridge's source #included,
 #                                             a test build) into OUT/unit.exe
 #
@@ -27,6 +28,14 @@ LIB=onnxruntime.dll
 
 test_path=
 unit=
+if [ "${1:-}" = "--bench" ]; then
+  [ $# -eq 2 ] || { echo "usage: $0 --bench OUT" >&2; exit 2; }
+  command -v "$CC" >/dev/null || { echo "bridge/win/build.sh: $CC not found (install mingw-w64)" >&2; exit 1; }
+  mkdir -p "$2"
+  "$CC" -O2 -Wall -Wextra -Wno-unused-result -std=gnu11 -I"$here/.." "$here/bench/rbsp-bench.c" -static-libgcc -o "$2/rbsp-bench.exe"
+  echo "built $2/rbsp-bench.exe"
+  exit 0
+fi
 if [ "${1:-}" = "--unit" ]; then
   [ $# -eq 2 ] || { echo "usage: $0 --unit OUT" >&2; exit 2; }
   unit=1

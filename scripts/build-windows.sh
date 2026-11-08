@@ -81,6 +81,8 @@ fi
 echo "== the bridge"
 "$root/bridge/win/build.sh" "$root/build/bridge-win" > "$root/build/bridge-win.log" 2>&1 || { tail -20 "$root/build/bridge-win.log"; die "the bridge didn't build"; }
 cp "$root/build/bridge-win/$bridge" "$dist/$bridge"
+# not part of the signed payload: a diagnostic tool, published next to it (rbsp-bench.exe)
+"$root/bridge/win/build.sh" --bench "$dist" > "$root/build/bench-win.log" 2>&1 || { tail -20 "$root/build/bench-win.log"; die "rbsp-bench didn't build"; }
 
 echo "== the app"
 command -v dotnet > /dev/null || die "dotnet not found (Microsoft's .NET 8 SDK)"

@@ -175,6 +175,10 @@ else
     fresh wd2; near=; config 'gpu_v4=1\n'
     out="$(RBSTEMS_TEST_GPU_AS_CPU=1 outcome a d)"
     expect '[ "$out" = "a model d model " ] && ! has "this model now runs on the CPU"' "a GPU run in time: no fallback: got \"$out\""
+    # rbsp-bench.exe, on the CPU with the tiny model (no GPU here)
+    "$root/bridge/win/build.sh" --bench "$scratch/bench" > /dev/null 2>&1 && cp "$ort/onnxruntime.dll" "$scratch/bench/ort.dll"
+    bout="$(cd "$scratch/bench" && $WINE ./rbsp-bench.exe --model "$(winpath "$scratch/model/hdemucs.onnx")" --cpu --runs 2 --samples 4096 --frames 4 --ort "$(winpath "$scratch/bench/ort.dll")" 2>/dev/null | tr -d '\r')"
+    expect 'grep -q "average of 2 runs" <<< "$bout" && grep -q "running on the CPU" <<< "$bout" && ! grep -q FAIL <<< "$bout"' "rbsp-bench runs a model on the CPU: got \"$bout\""
     fresh sh1; near=; config 'gpu_v4=1\n'
     out="$(RBSTEMS_TEST_GPU_AS_CPU=1 harness share "$(winpath "$scratch/model/hdemucs.onnx")")"
     expect '! grep -q FAIL <<< "$out" && [ "$(count "shared with an open session")" = 1 ] && [ "$(count "Demucs session opened")" = 3 ]' "GPU sessions of one model are shared: got \"$out\""
