@@ -91,6 +91,7 @@ public static class Elevated
         {
             if (!Rekordbox.SignedByPioneer(rb.Ort)) return AdminExit.NotPioneers;
             pioneerSha = Files.Sha256(current);
+            ReclaimRoot(p.RootDir, log);
             Directory.CreateDirectory(p.RootDir);
             SecureRoot(p.RootDir);
             Directory.CreateDirectory(backup);
@@ -171,6 +172,27 @@ public static class Elevated
         if (Files.Copy(saved, tmp) != null || Files.Sha256(tmp) != sha) { Files.Remove(tmp); return false; }
         try { File.Move(tmp, target, true); } catch (Exception e) { Files.Remove(tmp); log.Write("restore failed: " + e.Message); return false; }
         return Files.Sha256(target) == sha;
+    }
+
+    /// %ProgramData% lets every user create folders: a standard user could make our folder first (a
+    /// junction elsewhere, or a folder of theirs with files planted in it). Unless it is a real folder
+    /// owned by Administrators or SYSTEM, it is removed (a junction is unlinked, never followed) and
+    /// made again by this process. Done before the first install's writes.
+    static void ReclaimRoot(string dir, Log log)
+    {
+        if (!OperatingSystem.IsWindows() || !Directory.Exists(dir)) return;
+        var info = new DirectoryInfo(dir);
+        if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            log.Write($"Stems Cache: {dir} was a link or junction: removed");
+            info.Delete();                                   // the link itself, not its target
+            return;
+        }
+        var owner = info.GetAccessControl(AccessControlSections.Owner).GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier;
+        bool trusted = owner != null && (owner.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid) || owner.IsWellKnown(WellKnownSidType.LocalSystemSid));
+        if (trusted) return;
+        log.Write($"Stems Cache: {dir} was made by another account ({owner?.Value ?? "unknown owner"}): removed and made again");
+        info.Delete(true);
     }
 
     /// Administrators and SYSTEM: full control; Users: read and run; nothing inherited; owned by

@@ -51,14 +51,31 @@ Legend: [x] done · [~] in progress · [ ] to do · [!] blocked or needs the use
 - Swift references: `app/Sources/Config.swift`, `Payload.swift`, `Signing.swift`, `Compat.swift`, `Rekordbox.swift`, `Models.swift`, `State.swift`, `Location.swift`.
 - NuGet (xUnit) works from this container; `dotnet test` runs here.
 
-## Phase 3: elevated operations
-- [ ] `--elevated install-cache|uninstall-cache|update-cache` (UAC runas), RootExit-style codes, Global mutex, backups + SHA256SUMS, ProgramData ACLs, rollback
-
-## Phase 4: UI
-- [ ] MainForm (lights, buttons, log, status line, menus), TaskDialog alerts, SettingsForm, LocationMonitor
-
-## Phase 5: watcher, update, report
-- [ ] `--watch` via HKCU Run + FileSystemWatcher; self-update (rename running exe); report zip
+## Phases 3 to 5: elevated operations, UI, watcher, update, report (`windows/RBStemsPlus/`)
+- [x] `Program.cs` runs four ways: the app, `--watch`, `--elevated <op>` and `--probe`.
+- [x] `Engine.cs` installs, uninstalls and reinstalls the two features, reinstalls what went missing, and does the complete uninstall.
+  - **Order:** fetch the payload (or use the saved one offline), download and verify the assets, wait for rekordbox to close, then change things.
+  - **Elevation:** UAC through `Verb=runas`; a declined prompt (1223) maps to `NotAdmin`.
+  - **Watcher:** `WatcherRegistration` uses HKCU Run, detects being turned off through `StartupApproved\Run`, and asks the watcher to quit through a named event.
+- [x] `MainForm.cs`: the lights (green, red or yellow, with tips), the buttons, the status line, the log, the menus, and TaskDialog confirmations. A second launch brings the window forward through a "show" file.
+- [x] `SettingsForm.cs`: max GB and days, Change… (a folder on an external drive, checked and given a marker), Use This PC, Clear Saved Stems.
+- [x] `Watcher.cs`: FileSystemWatcher on `Program Files\rekordbox` and the models folder; it waits for the installer and for rekordbox to close; three choices (Reinstall Now, Remind Me Later, Don't Ask Again).
+- [x] `Updater.cs`: daily check, zip sha and version check, rename the running exe to `.old`, copy the new one in, restart. It also handles the self-delete at the end of the complete uninstall.
+- [x] `Report.cs`: a zip on the Desktop with the probe, logs, config and crash names, the user name replaced; it also opens a prefilled GitHub issue.
+- [x] **Verified under wine** with Pioneer's real `onnxruntime.dll`:
+  - `--probe` finds rekordbox 7.2.14.0323, ORT 1.18.0, signed by AlphaTheta;
+  - `--elevated install-cache` backs up Pioneer's DLL with `SHA256SUMS`, makes the ORT copy and puts the bridge in place;
+  - `--elevated uninstall-cache` puts Pioneer's DLL back byte for byte and removes `ProgramData\rbstemsplus`.
+- [!] **Not verifiable under wine:**
+  - the ACLs (wine doesn't store them here, so the release bridge, correctly, refuses the real library under wine);
+  - the UI (no display, and wine can't run the single-file bundle).
+  - Both need Windows: CI (windows-latest) or the user's PC.
+- [x] Fixed: `%ProgramData%\rbstemsplus` pre-created by another account (a junction, or planted files) is removed and made again before the first install (`Elevated.ReclaimRoot`).
+- [ ] Not ported (smaller macOS features):
+  - the "leftover action" resume prompt (it is only logged);
+  - offering to move stems between locations;
+  - the Stems Cache update prompt when the payload's bridge is newer than the installed one;
+  - LocationMonitor's drive-change events (the window refreshes every 5 s instead).
 
 ## Phase 6: release, bootstrap, CI, docs
 - [ ] `scripts/build-windows.sh`, `scripts/bootstrap.ps1`, `release.sh` additions, `.github/workflows/windows.yml`

@@ -7,7 +7,7 @@ using System.Text;
 
 namespace RBStemsPlus;
 
-public static class Location
+public static class CacheLocation
 {
     public static string MarkerText(string id) => $"id={id}\nformat={Consts.MarkerFormat}\n";
 

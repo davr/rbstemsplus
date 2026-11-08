@@ -121,7 +121,7 @@ public class MarkerTests
         var f = Fixtures.Read("marker-fixtures.txt").First(x => x.Name == name);
         var dir = Directory.CreateTempSubdirectory().FullName;
         File.WriteAllBytes(Path.Combine(dir, Consts.MarkerName), f.Content);
-        var id = Location.ReadMarker(dir);
+        var id = CacheLocation.ReadMarker(dir);
         bool valid = id != null && string.Equals(id, "0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F", StringComparison.OrdinalIgnoreCase);
         Assert.Equal(f.Expected == "valid", valid);
     }
@@ -378,10 +378,10 @@ public class LocationTests
     public void CreateMakesAFolderWithAMarker()
     {
         var parent = Directory.CreateTempSubdirectory().FullName;
-        var (dir, id, err) = Location.Create(parent);
+        var (dir, id, err) = CacheLocation.Create(parent);
         if (!OperatingSystem.IsWindows()) { Assert.NotNull(err); return; }   // a drive letter's path only
         Assert.Null(err);
-        Assert.Equal(id, Location.ReadMarker(dir!));
+        Assert.Equal(id, CacheLocation.ReadMarker(dir!));
     }
 
     [Fact]
@@ -393,7 +393,7 @@ public class LocationTests
         File.WriteAllBytes(Path.Combine(x, "ab" + new string('0', 62) + ".flac"), new byte[1000]);
         File.WriteAllBytes(Path.Combine(x, "other.txt"), new byte[5000]);
         File.WriteAllBytes(Path.Combine(c, "notes.txt"), new byte[5000]);
-        Assert.InRange(Location.EntriesSize(c)!.Value, 1000, 4096 * 2);
-        Assert.Equal(0, Location.EntriesSize(Path.Combine(c, "missing")));
+        Assert.InRange(CacheLocation.EntriesSize(c)!.Value, 1000, 4096 * 2);
+        Assert.Equal(0, CacheLocation.EntriesSize(Path.Combine(c, "missing")));
     }
 }

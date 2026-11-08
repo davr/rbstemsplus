@@ -134,3 +134,10 @@ Shared contracts the Windows side must keep:
 - **Model swap:** the same decisions as `Models.swift` (save Pioneer's with its `.engine`, `mayBePioneers`, check again before the replace), using `File.Move(overwrite)`, which is MoveFileEx(REPLACE_EXISTING) on Windows.
 - **bridge-state start times:** the bridge writes the process creation time as whole seconds; .NET's `Process.StartTime` may round differently, so a difference of up to 1 second is accepted.
 - **Small divergence:** `ConfigFile.ParseNumber` uses .NET invariant parsing. Unlike strtod, it doesn't take hex floats (`0x1p1`) or `inf`. Out-of-range values are refused anyway, and no fixture uses hex.
+
+## Building the Windows app (lessons)
+- **Ubuntu's `dotnet-sdk-8.0` package lacks `Microsoft.NET.Sdk.WindowsDesktop`**, so WinForms won't build with it. Use Microsoft's SDK: `curl -fsSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 8.0 --install-dir <dir>`, then `DOTNET_ROOT=<dir> PATH=<dir>:$PATH`. `EnableWindowsTargeting` lets it build on Linux.
+- **`Location` collides** with `Control.Location` inside a Form. The core class is `CacheLocation`.
+- **Wine 9 can't start a single-file .NET bundle** (`0x8007046C` loading System.Private.CoreLib). To test under wine, publish with `-p:PublishSingleFile=false`. The release is single-file with compression: 72 MB, against 162 MB without.
+- **Wine doesn't persist DACLs or owners** set by SetAccessControl on this filesystem: files report the wine user as owner, with Everyone allowed to read. ACL behaviour must be tested on real Windows.
+- `AppVersion` reads the **core** assembly's version, so the version is set for every project in `windows/Directory.Build.props` (`-p:RbspVersion=`).

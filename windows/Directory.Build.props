@@ -1,0 +1,7 @@
+<Project>
+  <!-- One version for every project: scripts/build-windows.sh passes -p:RbspVersion=$(cat VERSION). -->
+  <PropertyGroup>
+    <Version Condition="'$(RbspVersion)' != ''">$(RbspVersion)</Version>
+    <Version Condition="'$(RbspVersion)' == ''">0.0.0</Version>
+  </PropertyGroup>
+</Project>
