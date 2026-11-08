@@ -1,0 +1,11 @@
+; The bridge's exports, with the ordinals of Pioneer's onnxruntime.dll for rekordbox 7 on Windows
+; (ONNX Runtime 1.18.0, DirectML build). rekordbox.exe and Demucs3.dll import @1 and @4 BY ORDINAL,
+; so these numbers are a contract: never renumber them. rbstems_marker comes after, so that the app
+; can tell the bridge from Pioneer's library (it also looks for the "rbstems bridge: " string).
+LIBRARY onnxruntime.dll
+EXPORTS
+    OrtGetApiBase                                   @1
+    OrtSessionOptionsAppendExecutionProviderEx_DML  @2
+    OrtSessionOptionsAppendExecutionProvider_CPU    @3
+    OrtSessionOptionsAppendExecutionProvider_DML    @4
+    rbstems_marker                                  @5 DATA

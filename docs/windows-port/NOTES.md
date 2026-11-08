@@ -107,3 +107,20 @@ Shared contracts the Windows side must keep:
 - It saves `rbstemsplus-probe.txt` on the Desktop, with the user name replaced by `<user>`.
 - It parses PE export, import and delay-import tables in pure PowerShell, so it doesn't need Add-Type or C#. Windows PowerShell 5.1 can't do bitwise operations on UInt64 values with the top bit set, so a thunk's ordinal flag is read from its top byte instead.
 - It couldn't be test-run here: downloading pwsh was denied by the sandbox's auto-mode classifier.
+
+## The user's rekordbox binaries (2026-11-08)
+- The user uploaded `rekordbox.exe`, `rekordboxAgent.exe`, `onnxruntime.dll`, `DirectML.dll`, `Demucs3.dll` and `Spleeter.dll` (7.2.14) at `https://davr.org/rekordboxbinaries.zip`.
+  - **Use https**: plain http fails DNS, because only the HTTPS proxy is configured.
+  - The sha256 of `onnxruntime.dll` and `Demucs3.dll` match the probe.
+  - **Not committed.** These are Pioneer's files: keep them in the scratch area.
+- The Windows bridge test suite passes against Pioneer's `onnxruntime.dll` under wine. Point `RBSTEMS_WIN_ORT=<folder with onnxruntime.dll and DirectML.dll>` at it. The DirectML provider is never appended in the tests, so `d3d12` isn't needed.
+
+## Windows bridge: lessons
+- `windows.h` defines `near` and `far`: `#undef` them in test code.
+- The ORT header uses MSVC SAL (`_Frees_ptr_opt_`): define it as empty for mingw.
+- libFLAC 1.5 builds a pthread-based multithreaded encoder by default: build it with `--disable-multithreading` for mingw, so the DLL doesn't need winpthread.
+- `FOLDERID_*` GUIDs need `-luuid`.
+- In an exe, `&ImportedFunction` is the exe's own import stub. To find which module a DLL export lives in, use the address of a **data** export declared `__declspec(dllimport)` (`rbstems_marker`).
+- objdump prints the name table as `[   n] Name`, where n is ordinal minus base. Under awk, "[" and "n]" are separate fields.
+- The free-space floor is min(10% of the disk, 50 GB). A test that wants to be "under the floor" with a 1000 GB disk needs less than 50 GB free.
+- The suite takes about 1 minute under wine.

@@ -35,6 +35,10 @@
 #include <stdatomic.h>
 #include <strings.h>
 
+/* MSVC's SAL annotations the ONNX Runtime header uses on Windows; empty for mingw */
+#ifndef _Frees_ptr_opt_
+#define _Frees_ptr_opt_
+#endif
 #include "onnxruntime_c_api.h"
 
 #define FORMAT "rbstems-v1"
@@ -1020,8 +1024,8 @@ static int file_sha256_locked(const char *path, char out[65]) {
     char memo[RB_PATH_MAX], tmp[RB_PATH_MAX], want[128], line[200];
     FILE *f;
     if (!memo_dir[0]) memo[0] = 0;                          /* no cache: no memo, hashed every time */
-    else pathf(memo, sizeof memo, "%s/model-%llu.sha256", memo_dir, (unsigned long long)st.st_ino);
-    snprintf(want, sizeof want, "%lld %ld", (long long)st.st_size, (long)st.st_mtimespec.tv_sec);
+    else pathf(memo, sizeof memo, "%s\\model-%llu.sha256", memo_dir, (unsigned long long)st.st_ino);
+    snprintf(want, sizeof want, "%lld %ld", (long long)st.st_size, (long)st.st_mtime);
     long long size = 0;
     int err, fd = memo[0] ? checked_open(AT_FDCWD, memo, sizeof line - 1, &size, &err) : -1;
     if (fd >= 0) {
@@ -1124,26 +1128,9 @@ static int layout(const char *n, int level, int dir, int file, const char *paren
     return (!strncmp(n + 64, ".flac", 5) || !strncmp(n + 64, ".desc", 5)) && is_pid_tmp(n + 69) ? ENTRY_TMP : OTHER;
 }
 
-/* calls f(name, lstat) for each name in the folder fd (not "." or ".."); -1 if the folder couldn't
- * be read whole (f returning nonzero stops it there, also -1) */
-static int each_name(int fd, int (^f)(const char *name, const struct rb_stat *st)) {
-    int d = dup(fd), r = 0;
-    DIR *dp = d >= 0 ? fdopendir(d) : NULL;
-    if (!dp) { if (d >= 0) close(d); return -1; }
-    struct dirent *e;
-    errno = 0;
-    while ((e = readdir(dp))) {
-        struct rb_stat st;
-        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-        if (rb_fstatat(fd, e->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0) {
-            if (errno != ENOENT) r = -1;                    /* gone since: fine */
-        } else if (f(e->d_name, &st)) { r = -1; break; }
-        errno = 0;
-    }
-    if (errno) r = -1;
-    closedir(dp);
-    return r;
-}
+/* calls f(ctx, name, lstat) for each name in the folder fd (not "." or ".."); -1 if the folder
+ * couldn't be read whole (f returning nonzero stops it there, also -1) */
+static int each_name(int fd, rb_name_fn f, void *ctx) { return rb_each_name(fd, f, ctx); }
 
 /* The disk space an entry takes (the size limit counts it): st_blocks of <key>.flac, <key>.desc
  * and, on exFAT and FAT32, their companions. x: its prefix folder. A missing file counts 0. */
@@ -1363,73 +1350,93 @@ static void free_index(summary *ix, size_t n) {
 /* (Re)reads every RBD2 summary of one model's folder, off rekordbox's threads (the maintenance
  * queue), and publishes it while the location is still available; up to the ceiling. The number
  * loaded, or -1 when the location isn't available. Clears index_loading in any case. */
+typedef struct { summary *s; size_t n, cap; } bucket;
+typedef struct {
+    char (*pre)[3];
+    size_t np, limit;
+    int m;
+    uint64_t dev;
+    bucket *bk;
+    _Atomic size_t taken;
+    _Atomic int capped;
+} index_walk;
+typedef struct { index_walk *w; size_t i; int x; } index_bucket_walk;
+
+static int index_prefix_cb(void *ctx, const char *pn, const struct rb_stat *ps) {
+    index_walk *w = ctx;
+    if (layout(pn, 2, RB_ISDIR(ps->st_mode), RB_ISREG(ps->st_mode), NULL) == PREFIX_DIR && w->np < 256) memcpy(w->pre[w->np++], pn, 3);
+    return 0;
+}
+
+static int index_entry_cb(void *ctx, const char *en, const struct rb_stat *es) {
+    index_bucket_walk *bw = ctx;
+    index_walk *w = bw->w;
+    bucket *k = &w->bk[bw->i];
+    if (layout(en, 3, RB_ISDIR(es->st_mode), RB_ISREG(es->st_mode), w->pre[bw->i]) != ENTRY_DESC) return 0;
+    if (atomic_fetch_add(&w->taken, 1) >= w->limit) { w->capped = 1; return 1; }
+    if (k->n == k->cap) {
+        summary *t = realloc(k->s, (k->cap ? k->cap * 2 : 64) * sizeof *t);
+        if (!t) return 1;                                   /* a partial index: still correct */
+        k->s = t;
+        k->cap = k->cap ? k->cap * 2 : 64;
+    }
+    char key[65];
+    memcpy(key, en, 64);
+    key[64] = 0;
+    if (read_desc(bw->x, key, &k->s[k->n]) == 0) {
+        if (!near_usable(&k->s[k->n])) free_summary(&k->s[k->n]);
+        else { memcpy(k->s[k->n].key, key, 65); k->n++; }
+    }
+    return 0;
+}
+
+static void index_bucket(void *ctx, size_t i) {
+    index_walk *w = ctx;
+    int e, x = sub_open(w->m, w->pre[i], 0, w->dev, &e);
+    if (x < 0) return;
+    index_bucket_walk bw = {w, i, x};
+    each_name(x, index_entry_cb, &bw);
+    close(x);
+}
+
 static long load_index(const char *model) {
     summary *ix = NULL;
     size_t n = 0;
-    __block _Atomic int capped = 0;
     long r = -1;
     double t0 = rb_mono_seconds();
     rb_lock(&lock);
     unsigned long long seq0 = add_seq;
     rb_unlock(&lock);
-    size_t limit = index_ceiling();
-    int err = 0, b = -1, m = -1;
+    index_walk w = {.limit = index_ceiling(), .m = -1};
+    int err = 0, b = -1;
     struct rb_stat st;
     if (loc_now() == LOC_AVAILABLE && !location_recheck()) {
         b = open_base(0, &err);
-        if (b >= 0 || (!chosen && err == ENOENT)) r = 0;     /* this Mac's folder cleared: an empty index */
+        if (b >= 0 || (!chosen && err == ENOENT)) r = 0;     /* this PC's folder cleared: an empty index */
     }
     /* the prefix folders are read in parallel: on a USB drive each small read waits on the drive,
-     * and several at once keep it busy (measured on an exFAT stick: 37 s for 10,000 entries one at a time, 8 s in parallel) */
-    __block char (*pre)[3] = NULL;
-    __block size_t np = 0;
-    if (b >= 0 && rb_fstat(b, &st) == 0 && (m = sub_open(b, model, 0, st.st_dev, &err)) >= 0 && (pre = malloc(256 * 3)))
-        each_name(m, ^int(const char *pn, const struct rb_stat *ps) {
-            if (layout(pn, 2, RB_ISDIR(ps->st_mode), RB_ISREG(ps->st_mode), NULL) == PREFIX_DIR && np < 256) memcpy(pre[np++], pn, 3);
-            return 0;
-        });
+     * and several at once keep it busy */
+    if (b >= 0 && rb_fstat(b, &st) == 0 && (w.m = sub_open(b, model, 0, st.st_dev, &err)) >= 0 && (w.pre = malloc(256 * 3))) {
+        w.dev = st.st_dev;
+        each_name(w.m, index_prefix_cb, &w);
+    }
     test_pause("RBSTEMS_TEST_INDEX_DELAY");                 /* the prefix folders listed, none read yet */
-    typedef struct { summary *s; size_t n, cap; } bucket;
-    bucket *bk = np ? calloc(np, sizeof *bk) : NULL;
-    __block _Atomic size_t taken = 0;
-    if (bk)
-        dispatch_apply(np, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^(size_t i) {
-            int e, x = sub_open(m, pre[i], 0, st.st_dev, &e);
-            if (x < 0) return;
-            bucket *k = &bk[i];
-            each_name(x, ^int(const char *en, const struct rb_stat *es) {
-                if (layout(en, 3, RB_ISDIR(es->st_mode), RB_ISREG(es->st_mode), pre[i]) != ENTRY_DESC) return 0;
-                if (atomic_fetch_add(&taken, 1) >= limit) { capped = 1; return 1; }
-                if (k->n == k->cap) {
-                    summary *t = realloc(k->s, (k->cap ? k->cap * 2 : 64) * sizeof *t);
-                    if (!t) return 1;                       /* a partial index: still correct */
-                    k->s = t;
-                    k->cap = k->cap ? k->cap * 2 : 64;
-                }
-                char key[65];
-                memcpy(key, en, 64);
-                key[64] = 0;
-                if (read_desc(x, key, &k->s[k->n]) == 0) {
-                    if (!near_usable(&k->s[k->n])) free_summary(&k->s[k->n]);
-                    else { memcpy(k->s[k->n].key, key, 65); k->n++; }
-                }
-                return 0;
-            });
-            close(x);
-        });
-    for (size_t i = 0; bk && i < np; i++) n += bk[i].n;
+    w.bk = w.np ? calloc(w.np, sizeof *w.bk) : NULL;
+    if (w.bk) rb_apply(w.np, index_bucket, &w);
+    for (size_t i = 0; w.bk && i < w.np; i++) n += w.bk[i].n;
     if (n && (ix = malloc(n * sizeof *ix))) {
         size_t at = 0;
-        for (size_t i = 0; i < np; i++) { memcpy(ix + at, bk[i].s, bk[i].n * sizeof *ix); at += bk[i].n; }
+        for (size_t i = 0; i < w.np; i++) { memcpy(ix + at, w.bk[i].s, w.bk[i].n * sizeof *ix); at += w.bk[i].n; }
     } else if (n) {                                         /* out of memory: no index this time */
-        for (size_t i = 0; i < np; i++) free_index(bk[i].s, bk[i].n), bk[i].s = NULL;
+        for (size_t i = 0; i < w.np; i++) free_index(w.bk[i].s, w.bk[i].n), w.bk[i].s = NULL;
         n = 0;
     }
-    for (size_t i = 0; bk && i < np; i++) free(bk[i].s);
-    free(bk);
-    free(pre);
-    if (m >= 0) close(m);
+    for (size_t i = 0; w.bk && i < w.np; i++) free(w.bk[i].s);
+    free(w.bk);
+    free(w.pre);
+    if (w.m >= 0) close(w.m);
     if (b >= 0) close(b);
+    size_t limit = w.limit;
     summary *t = r >= 0 ? realloc(ix, (n + RECENT + 1) * sizeof *ix) : NULL;   /* room for the merge */
     if (t) ix = t;
     double took = rb_mono_seconds() - t0;
@@ -1455,24 +1462,28 @@ static long load_index(const char *model) {
     index_loading = 0;
     rb_unlock(&lock);
     free_index(ix, n);
-    if (capped) logf_("summaries: stopped at %zu (the most kept for a %.1f GB limit): near hits use those; exact hits are unaffected",
-                      limit, max_bytes / (double)(1LL << 30));
+    if (w.capped) logf_("summaries: stopped at %zu (the most kept for a %.1f GB limit): near hits use those; exact hits are unaffected",
+                        limit, max_bytes / (double)(1LL << 30));
     if (took > 2) logf_("summaries: loading took %.1f s; reloaded at most every %.0f s", took, fmax(30, 10 * took));
     return r;
 }
 
 /* queues a load of model's summaries on the maintenance queue, unless one is queued already */
+static void index_load_job(void *ctx) {
+    load_index(ctx);
+    free(ctx);
+}
+
 static void queue_index_load(const char *model) {
     rb_lock(&lock);
     int go = !index_loading;
     index_loading = 1;
     rb_unlock(&lock);
     char *m = go ? strdup(model) : NULL;
-    if (!m) { if (go) { rb_lock(&lock); index_loading = 0; rb_unlock(&lock); } return; }
-    dispatch_async(maint, ^{
-        load_index(m);
+    if (!m || rb_async(maint, index_load_job, m)) {
         free(m);
-    });
+        if (go) { rb_lock(&lock); index_loading = 0; rb_unlock(&lock); }
+    }
 }
 
 static void add_to_index(const char *model, const char *key, const float *d, int frames, float r0, float g0,
@@ -1711,15 +1722,96 @@ static void orphan(int dir, const char *name, const struct rb_stat *st, time_t n
  * the walk was complete. */
 static int prune_running;               /* under lock */
 static long long prune_pending;
+
+typedef struct {
+    pfile *pf;
+    size_t n, cap, nm;
+    char (*models)[65];
+    long long temps;
+    int complete;
+    time_t now;
+    uint64_t dev;
+    int b, m, x;                        /* the folders being walked */
+    size_t model;                       /* index of the model folder being walked */
+    const char *prefix;                 /* name of the prefix folder being walked */
+} prune_walk;
+
+static int prune_add(prune_walk *w, const char *name, int kind, const struct rb_stat *st) {
+    if (w->n == w->cap) {
+        pfile *t = realloc(w->pf, (w->cap ? w->cap * 2 : 4096) * sizeof *w->pf);
+        if (!t) { w->complete = 0; return 1; }
+        w->pf = t;
+        w->cap = w->cap ? w->cap * 2 : 4096;
+    }
+    pfile *f = &w->pf[w->n++];
+    unhex(name, f->key);
+    f->model = (uint32_t)w->model;
+    f->kind = (uint8_t)kind;
+    f->mtime = st->st_mtime;
+    f->bytes = st->st_blocks * 512;
+    return 0;
+}
+
+static int prune_top_cb(void *ctx, const char *name, const struct rb_stat *st) {
+    prune_walk *w = ctx;
+    int k = layout(name, 1, RB_ISDIR(st->st_mode), RB_ISREG(st->st_mode), NULL);
+    if (k == MODEL_DIR) {
+        if (!(w->nm & (w->nm - 1)) || !w->models) {
+            char (*t)[65] = realloc(w->models, (w->nm ? w->nm * 2 : 1) * 65);
+            if (!t) { w->complete = 0; return 1; }
+            w->models = t;
+        }
+        memcpy(w->models[w->nm++], name, 65);
+    } else if (k == MEMO_TMP && w->now - st->st_mtime > 3600) {
+        if (!rb_unlinkat(w->b, name, 0)) w->temps++;
+    } else if (k == COMP_DIR) orphan(w->b, name, st, w->now);
+    return 0;
+}
+
+static int prune_entry_cb(void *ctx, const char *en, const struct rb_stat *es) {
+    prune_walk *w = ctx;
+    int kind = layout(en, 3, RB_ISDIR(es->st_mode), RB_ISREG(es->st_mode), w->prefix);
+    switch (kind) {
+    case ENTRY_FLAC: return prune_add(w, en, PF_FLAC, es);
+    case ENTRY_DESC: return prune_add(w, en, PF_DESC, es);
+    case COMP_FLAC: return prune_add(w, en + 2, PF_CFLAC, es);
+    case COMP_DESC: return prune_add(w, en + 2, PF_CDESC, es);
+    case COMP_TMP: orphan(w->x, en, es, w->now); return 0;
+    case ENTRY_TMP:
+        if (w->now - es->st_mtime > 3600 && !rb_unlinkat(w->x, en, 0)) {
+            char c[96];
+            snprintf(c, sizeof c, "._%s", en);
+            rb_unlinkat(w->x, c, 0);
+            w->temps++;
+        }
+        return 0;
+    default: return 0;
+    }
+}
+
+static int prune_prefix_cb(void *ctx, const char *pn, const struct rb_stat *ps) {
+    prune_walk *w = ctx;
+    int k = layout(pn, 2, RB_ISDIR(ps->st_mode), RB_ISREG(ps->st_mode), NULL), e;
+    if (k == COMP_DIR) orphan(w->m, pn, ps, w->now);
+    if (k != PREFIX_DIR) return 0;
+    if ((w->x = sub_open(w->m, pn, 0, w->dev, &e)) < 0) { if (e != ENOENT && e != EXDEV) w->complete = 0; return !w->complete; }
+    w->prefix = pn;
+    if (each_name(w->x, prune_entry_cb, w)) w->complete = 0;
+    close(w->x);
+    w->x = -1;
+    return !w->complete;
+}
+
+static int prune_memo_cb(void *ctx, const char *name, const struct rb_stat *st) {
+    prune_walk *w = ctx;
+    if (RB_ISREG(st->st_mode) && is_memo_tmp(name) && w->now - st->st_mtime > 3600 && !rb_unlinkat(w->b, name, 0)) w->temps++;
+    return 0;
+}
+
 static int prune(void) {
-    __block pfile *pf = NULL;
-    __block size_t n = 0, cap = 0, nm = 0;
-    __block char (*models)[65] = NULL;
-    __block long long temps = 0;
-    __block int complete = 1;
+    prune_walk w = {.complete = 1, .now = time(NULL), .b = -1, .m = -1, .x = -1};
     long long total = 0, aged = 0, evicted = 0;
-    time_t now = time(NULL);
-    int err, b;
+    int err = 0, b = -1;
     struct rb_stat bs;
     if (loc_now() != LOC_AVAILABLE || location_recheck() || (b = open_base(0, &err)) < 0) return !chosen && b < 0 && err == ENOENT;
     if (rb_fstat(b, &bs) != 0) { close(b); return 0; }
@@ -1727,80 +1819,33 @@ static int prune(void) {
     prune_running = 1;
     prune_pending = 0;
     rb_unlock(&lock);
-    uint64_t dev = bs.st_dev;
-    int (^add)(int, const char *, int, const struct rb_stat *) = ^int(int model, const char *name, int kind, const struct rb_stat *st) {
-        if (n == cap) {
-            pfile *t = realloc(pf, (cap ? cap * 2 : 4096) * sizeof *pf);
-            if (!t) { complete = 0; return 1; }
-            pf = t;
-            cap = cap ? cap * 2 : 4096;
-        }
-        unhex(name, pf[n].key);
-        pf[n].model = (uint32_t)model;
-        pf[n].kind = (uint8_t)kind;
-        pf[n].mtime = st->st_mtime;
-        pf[n].bytes = (long long)st->st_blocks * 512;
-        n++;
-        return 0;
-    };
-    if (each_name(b, ^int(const char *name, const struct rb_stat *st) {
-            int k = layout(name, 1, RB_ISDIR(st->st_mode), RB_ISREG(st->st_mode), NULL);
-            if (k == MODEL_DIR) {
-                if (!(nm & (nm - 1)) || !models) {
-                    char (*t)[65] = realloc(models, (nm ? nm * 2 : 1) * 65);
-                    if (!t) { complete = 0; return 1; }
-                    models = t;
-                }
-                memcpy(models[nm++], name, 65);
-            } else if (k == MEMO_TMP && now - st->st_mtime > 3600) {
-                if (!rb_unlinkat(b, name, 0)) temps++;
-            } else if (k == COMP_DIR) orphan(b, name, st, now);
-            return 0;
-        })) complete = 0;
+    w.dev = bs.st_dev;
+    w.b = b;
+    if (each_name(b, prune_top_cb, &w)) w.complete = 0;
     test_pause("RBSTEMS_TEST_PRUNE_DELAY");                 /* the top level walked, the model folders not yet */
-    for (size_t i = 0; i < nm && complete; i++) {
-        int m = sub_open(b, models[i], 0, dev, &err);
-        if (m < 0) { if (err != ENOENT && err != EXDEV) complete = 0; continue; }
-        if (each_name(m, ^int(const char *pn, const struct rb_stat *ps) {
-                int k = layout(pn, 2, RB_ISDIR(ps->st_mode), RB_ISREG(ps->st_mode), NULL), e, x;
-                if (k == COMP_DIR) orphan(m, pn, ps, now);
-                if (k != PREFIX_DIR) return 0;
-                if ((x = sub_open(m, pn, 0, dev, &e)) < 0) { if (e != ENOENT && e != EXDEV) complete = 0; return !complete; }
-                if (each_name(x, ^int(const char *en, const struct rb_stat *es) {
-                        int kind = layout(en, 3, RB_ISDIR(es->st_mode), RB_ISREG(es->st_mode), pn);
-                        switch (kind) {
-                        case ENTRY_FLAC: return add((int)i, en, PF_FLAC, es);
-                        case ENTRY_DESC: return add((int)i, en, PF_DESC, es);
-                        case COMP_FLAC: return add((int)i, en + 2, PF_CFLAC, es);
-                        case COMP_DESC: return add((int)i, en + 2, PF_CDESC, es);
-                        case COMP_TMP: orphan(x, en, es, now); return 0;
-                        case ENTRY_TMP:
-                            if (now - es->st_mtime > 3600 && !rb_unlinkat(x, en, 0)) {
-                                char c[96];
-                                snprintf(c, sizeof c, "._%s", en);
-                                rb_unlinkat(x, c, 0);
-                                temps++;
-                            }
-                            return 0;
-                        default: return 0;
-                        }
-                    })) complete = 0;
-                close(x);
-                return !complete;
-            })) complete = 0;
+    for (size_t i = 0; i < w.nm && w.complete; i++) {
+        int m = sub_open(b, w.models[i], 0, w.dev, &err);
+        if (m < 0) { if (err != ENOENT && err != EXDEV) w.complete = 0; continue; }
+        w.m = m;
+        w.model = i;
+        if (each_name(m, prune_prefix_cb, &w)) w.complete = 0;
         close(m);
+        w.m = -1;
     }
     close(b);
     if (chosen && memo_dir[0]) {                            /* the memos' folder: its stale temporary files only */
         int md = rb_open(memo_dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
         if (md >= 0) {
-            each_name(md, ^int(const char *name, const struct rb_stat *st) {
-                if (RB_ISREG(st->st_mode) && is_memo_tmp(name) && now - st->st_mtime > 3600 && !rb_unlinkat(md, name, 0)) temps++;
-                return 0;
-            });
+            w.b = md;
+            each_name(md, prune_memo_cb, &w);
             close(md);
         }
     }
+    pfile *pf = w.pf;
+    size_t n = w.n;
+    char (*models)[65] = w.models;
+    int complete = w.complete;
+    time_t now = w.now;
     size_t live = 0;
     if (complete) {
         qsort(pf, n, sizeof *pf, by_key);
@@ -1850,31 +1895,34 @@ static int prune(void) {
     free(pf);
     free(models);
     logf_("limits: %.2f GB in cache (%lld bytes on disk); removed %lld unused for %g days, %lld over %.1f GB, %lld stale temp files%s",
-          total / (double)(1LL << 30), total, aged, max_days, evicted, max_bytes / (double)(1LL << 30), temps,
+          total / (double)(1LL << 30), total, aged, max_days, evicted, max_bytes / (double)(1LL << 30), w.temps,
           complete ? "" : " (the folder couldn't be read whole: no eviction this time)");
     return complete;
 }
 
 /* The limits at launch, once per load: retried (a minute apart, three times at most) when the walk
  * couldn't read everything, or the limits would go unenforced for the run (no total to grow). */
+static void first_prune_job(void *ctx) { first_prune((int)(intptr_t)ctx); }
 static void first_prune(int tries) {
     if (prune() || tries >= 3 || loc_now() != LOC_AVAILABLE) return;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_SEC), maint, ^{ first_prune(tries + 1); });
+    rb_after(maint, 60, first_prune_job, (void *)(intptr_t)(tries + 1));
 }
 
 /* queues prune on the maintenance queue, unless it is queued already */
 static int prune_queued;                /* under lock */
+static void prune_job(void *ctx) {
+    (void)ctx;
+    rb_lock(&lock);
+    prune_queued = 0;
+    rb_unlock(&lock);
+    prune();
+}
 static void queue_prune(void) {
     rb_lock(&lock);
     int go = !prune_queued;
     prune_queued = 1;
     rb_unlock(&lock);
-    if (go) dispatch_async(maint, ^{
-        rb_lock(&lock);
-        prune_queued = 0;
-        rb_unlock(&lock);
-        prune();
-    });
+    if (go && rb_async(maint, prune_job, NULL)) { rb_lock(&lock); prune_queued = 0; rb_unlock(&lock); }
 }
 
 /* ---------------------------------------------------------------- free space */
@@ -1886,43 +1934,29 @@ static void queue_prune(void) {
 #define FREE_FLOOR_MAX 50000000000ULL
 #define FREE_EVERY 60                   /* seconds a measurement is reused */
 
-/* Free bytes on the cache's volume as Finder shows them (including purgeable space, which macOS
- * frees on demand), else statfs's smaller count; 0 if neither answers. A test build can fake it
- * (RBSTEMS_TEST_FREE_GB) or skip Finder's count (RBSTEMS_TEST_STATFS). */
+/* Free bytes on the cache's volume available to this account (GetDiskFreeSpaceExW); 0 if it can't
+ * be read. A test build can fake it (RBSTEMS_TEST_FREE_GB). */
 static double free_bytes(const char **how) {
-    int finder = 1;
 #ifdef RBSTEMS_TEST_REAL_PATH
     const char *t = getenv("RBSTEMS_TEST_FREE_GB");
     if (t) { *how = "test"; return atof(t) * 1e9; }
-    finder = !getenv("RBSTEMS_TEST_STATFS");
 #endif
-    if (!chosen) mkdirs(base_dir);                          /* this Mac's: it may have been cleared since loading */
+    if (!chosen) mkdirs(base_dir);                          /* this PC's: it may have been cleared since loading */
     double b = 0;
-    CFURLRef u = finder ? CFURLCreateFromFileSystemRepresentation(NULL, (const UInt8 *)base_dir, (CFIndex)strlen(base_dir), true) : NULL;
-    CFTypeRef v = NULL;
-    if (u && CFURLCopyResourcePropertyForKey(u, kCFURLVolumeAvailableCapacityForImportantUsageKey, &v, NULL) && v
-        && CFGetTypeID(v) == CFNumberGetTypeID()) {
-        int64_t n = 0;
-        if (CFNumberGetValue((CFNumberRef)v, kCFNumberSInt64Type, &n) && n > 0) b = (double)n;
-    }
-    if (v) CFRelease(v);
-    if (u) CFRelease(u);
-    if (b > 0) { *how = "Finder's count"; return b; }
-    struct statfs fs;
-    *how = "statfs";
-    return statfs(base_dir, &fs) == 0 ? (double)fs.f_bavail * fs.f_bsize : 0;
+    *how = "GetDiskFreeSpaceEx";
+    return rb_space(base_dir, &b, NULL) == 0 ? b : 0;
 }
 
-/* The size of the cache's volume in bytes as statfs counts it (f_blocks * f_bsize, as the app
- * does); 0 if it can't be read. A test build can fake it (RBSTEMS_TEST_DISK_GB; 0: can't be read).
- * Called after free_bytes, which creates this Mac's cache folder. */
+/* The size of the cache's volume in bytes; 0 if it can't be read. A test build can fake it
+ * (RBSTEMS_TEST_DISK_GB; 0: can't be read). Called after free_bytes, which creates this PC's
+ * cache folder. */
 static uint64_t disk_bytes(void) {
 #ifdef RBSTEMS_TEST_REAL_PATH
     const char *t = getenv("RBSTEMS_TEST_DISK_GB");
     if (t) { double g = atof(t); return g > 0 ? (uint64_t)(g * 1e9 + 0.5) : 0; }
 #endif
-    struct statfs fs;
-    return statfs(base_dir, &fs) == 0 ? (uint64_t)fs.f_blocks * fs.f_bsize : 0;
+    double tot = 0;
+    return rb_space(base_dir, NULL, &tot) == 0 ? (uint64_t)tot : 0;
 }
 
 /* the floor for a disk of `disk` bytes (0: unknown): 10% of it, at most FREE_FLOOR_MAX */
@@ -2023,7 +2057,7 @@ static int repin(uint64_t old_dev, uint64_t old_ino) {
     if (!fresh) return ours;
     free_index(old, n);
     log_using("checked again: using");
-    dispatch_async(maint, ^{ first_prune(0); });
+    rb_async(maint, first_prune_job, (void *)(intptr_t)0);
     return 1;
 }
 
@@ -2239,18 +2273,17 @@ static int rebuild_spec(const float *x, size_t L, size_t F, float *out) {
     if (F != (L + HOP - 1) / HOP) return 1;
     const size_t frames = F + 4, full = NFFT + HOP * (frames - 1);
     if (start + L > full) return 1;
-    FFTSetup setup = vDSP_create_fftsetup(12, kFFTRadix2);    /* per call: no shared state between threads */
+    double *setup = malloc(sizeof(double) * 2 * NFFT);      /* rb_irfft's scratch, per call */
     float *win = malloc(sizeof(float) * NFFT), *env = calloc(full, sizeof(float)), *y = malloc(sizeof(float) * full);
     float *re = malloc(sizeof(float) * BINS), *im = malloc(sizeof(float) * BINS), *frame = malloc(sizeof(float) * NFFT);
     int ok = setup && win && env && y && re && im && frame;
     if (ok) {
-        for (int n = 0; n < NFFT; n++) win[n] = 0.5f - 0.5f * cosf(2.0f * (float)M_PI * n / NFFT);
+        for (int n = 0; n < NFFT; n++) win[n] = 0.5f - 0.5f * cosf(2.0f * 3.14159265f * n / NFFT);
         for (size_t t = 0; t < frames; t++)              /* the window envelope covers every frame, empty ones too */
             for (int n = 0; n < NFFT; n++) env[t * HOP + n] += win[n] * win[n];
-        /* vDSP's inverse real FFT returns the plain sum (no 1/NFFT): times sqrt(NFFT) for
-         * "normalized", over NFFT for the inverse DFT */
+        /* rb_irfft returns the plain sum (no 1/NFFT), as vDSP's inverse real FFT does: times
+         * sqrt(NFFT) for "normalized", over NFFT for the inverse DFT */
         const float scale = (float)(sqrt((double)NFFT) / NFFT);
-        DSPSplitComplex sc = {re, im};
         for (int s = 0; s < 4; s++)
             for (int c = 0; c < 2; c++) {
                 memset(y, 0, sizeof(float) * full);
@@ -2259,8 +2292,7 @@ static int rebuild_spec(const float *x, size_t L, size_t F, float *out) {
                     /* packed: re[0] = DC, im[0] = Nyquist (the restored top bin, zero) */
                     for (size_t k = 0; k < BINS; k++) { re[k] = xr[k * F + f]; im[k] = xi[k * F + f]; }
                     im[0] = 0.0f;
-                    vDSP_fft_zrip(setup, &sc, 1, 12, kFFTDirection_Inverse);
-                    vDSP_ztoc(&sc, 1, (DSPComplex *)frame, 2, BINS);
+                    rb_irfft(re, im, 12, frame, setup);
                     const size_t off = (f + 2) * HOP;
                     for (int n = 0; n < NFFT; n++) y[off + n] += frame[n] * scale * win[n];
                 }
@@ -2268,7 +2300,7 @@ static int rebuild_spec(const float *x, size_t L, size_t F, float *out) {
                 for (size_t n = 0; n < L; n++) o[n] = y[start + n] / env[start + n];
             }
     }
-    if (setup) vDSP_destroy_fftsetup(setup);
+    free(setup);
     free(win); free(env); free(y); free(re); free(im); free(frame);
     return ok ? 0 : 1;
 }
@@ -2366,15 +2398,55 @@ static OrtStatus *create_demucs(const OrtEnv *env, const ORTCHAR_T *path, const 
     return R->CreateSession(env, path, options, out);
 }
 
+/* the maintenance job queued when a Demucs session opens: this model's summaries, then (once per
+ * load) the limits */
+static void session_open_job(void *ctx) {
+    char *model = ctx;
+    static char loaded[65];                                 /* the maintenance queue's own: once per load */
+    static int pruned;
+    long n = -1;
+    if (!near_on) {                                         /* no index: the limits only */
+        rb_lock(&lock);
+        index_loading = 0;
+        int ok = model && loc_state == LOC_AVAILABLE;
+        rb_unlock(&lock);
+        if (ok) logf_("summaries not loaded: near hits are off");
+        else logf_("summaries not loaded: %s isn't available", base_dir);
+        if (!pruned && ok) { pruned = 1; first_prune(0); }
+        free(model);
+        return;
+    }
+    if (model && strcmp(loaded, model)) {
+        if ((n = load_index(model)) >= 0) memcpy(loaded, model, 65);
+    } else {                                                /* another session of a model already loaded */
+        rb_lock(&lock);
+        index_loading = 0;
+        if (model && loc_state == LOC_AVAILABLE) n = (long)index_n;
+        rb_unlock(&lock);
+    }
+    if (n >= 0) logf_("summaries loaded: %ld cached chunks", n);
+    else logf_("summaries not loaded: %s isn't available", base_dir);
+    if (!pruned && n >= 0) { pruned = 1; first_prune(0); }
+    free(model);
+}
+
+/* whether a model path names rekordbox's Demucs model: its file name is hdemucs.onnx, after a
+ * '\' or a '/' (Demucs3.dll builds "<folder>/hdemucs.onnx"), whatever the case */
+static int is_demucs_path(const ORTCHAR_T *p) {
+    size_t len = p ? wcslen(p) : 0;
+    if (len < 13) return 0;
+    const wchar_t *t = p + len - 13;
+    return (t[0] == L'\\' || t[0] == L'/') && !_wcsicmp(t + 1, L"hdemucs.onnx");
+}
+
 static OrtStatus *ORT_API_CALL hook_CreateSession(const OrtEnv *env, const ORTCHAR_T *model_path,
                                                   const OrtSessionOptions *options, OrtSession **out) {
-    size_t len = strlen(model_path);
-    if (len < 13 || strcmp(model_path + len - 13, "/hdemucs.onnx")) return R->CreateSession(env, model_path, options, out);
-    char fp[65];
+    if (!is_demucs_path(model_path)) return R->CreateSession(env, model_path, options, out);
+    char fp[65], path[RB_PATH_MAX];
     const char *how;
     /* hashed first: the checksum picks the options (the memo keeps it cheap) */
-    if (file_sha256(model_path, fp)) {
-        logf_("ERROR cannot read %s", model_path);
+    if (rb_utf8(model_path, -1, path, sizeof path) || file_sha256(path, fp)) {
+        logf_("ERROR cannot read %s", path[0] ? path : "the model (its path isn't valid UTF-16 or is too long)");
         return R->CreateSession(env, model_path, options, out);
     }
     OrtStatus *st = create_demucs(env, model_path, options, out, fp, &how);
@@ -2397,33 +2469,12 @@ static OrtStatus *ORT_API_CALL hook_CreateSession(const OrtEnv *env, const ORTCH
     rb_lock(&lock);
     index_loading = 1;                                      /* hook_Run doesn't queue another meanwhile */
     rb_unlock(&lock);
-    dispatch_async(maint, ^{
-        static char loaded[65];                             /* the maintenance queue's own: once per load */
-        static int pruned;
-        long n = -1;
-        if (!near_on) {                                     /* no index: the limits only */
-            rb_lock(&lock);
-            index_loading = 0;
-            int ok = model && loc_state == LOC_AVAILABLE;
-            rb_unlock(&lock);
-            logf_(ok ? "summaries not loaded: near hits are off" : "summaries not loaded: %s isn't available", base_dir);
-            if (!pruned && ok) { pruned = 1; first_prune(0); }
-            free(model);
-            return;
-        }
-        if (model && strcmp(loaded, model)) {
-            if ((n = load_index(model)) >= 0) memcpy(loaded, model, 65);
-        } else {                                            /* another session of a model already loaded */
-            rb_lock(&lock);
-            index_loading = 0;
-            if (model && loc_state == LOC_AVAILABLE) n = (long)index_n;
-            rb_unlock(&lock);
-        }
-        if (n >= 0) logf_("summaries loaded: %ld cached chunks", n);
-        else logf_("summaries not loaded: %s isn't available", base_dir);
-        if (!pruned && n >= 0) { pruned = 1; first_prune(0); }
+    if (rb_async(maint, session_open_job, model)) {
         free(model);
-    });
+        rb_lock(&lock);
+        index_loading = 0;
+        rb_unlock(&lock);
+    }
     return st;
 }
 
@@ -2504,7 +2555,7 @@ static void writer_done(long long bytes) {
  * happened; a chosen location's marker is checked at the first write of each batch. */
 static void store_entry(const char *model, const char *key, int16_t *pcm, float *mix, size_t L, int write_pcm, int rebuilt) {
 #ifdef RBSTEMS_TEST_REAL_PATH
-    if (getenv("RBSTEMS_TEST_WRITER_DELAY")) usleep((useconds_t)(atof(getenv("RBSTEMS_TEST_WRITER_DELAY")) * 1e6));
+    if (getenv("RBSTEMS_TEST_WRITER_DELAY")) rb_sleep_seconds(atof(getenv("RBSTEMS_TEST_WRITER_DELAY")));
 #endif
     if (loc_now() != LOC_AVAILABLE) return;
     rb_lock(&lock);
@@ -2594,6 +2645,26 @@ static int exact_adds_up(const int16_t *pcm, const float *mix, size_t L) {
     return rt[0] <= EXACT_RESIDUAL_MAX && rt[1] <= EXACT_RESIDUAL_MAX;
 }
 
+/* a chunk for the writer queue (store_entry), which frees it */
+typedef struct { char *model, *key; int16_t *pcm; float *mix; size_t L; int write_pcm, rebuilt; long long bytes; } store_job;
+static void store_job_run(void *ctx) {
+    store_job *j = ctx;
+    store_entry(j->model, j->key, j->pcm, j->mix, j->L, j->write_pcm, j->rebuilt);
+    free(j->pcm); free(j->mix); free(j->key); free(j->model);
+    writer_done(j->bytes);
+    free(j);
+}
+
+/* queues a store_job; on failure frees everything and gives the writer's place back */
+static void queue_store(char *model, char *key, int16_t *pcm, float *mix, size_t L, int write_pcm, int rebuilt, long long bytes) {
+    store_job *j = malloc(sizeof *j);
+    if (j) *j = (store_job){model, key, pcm, mix, L, write_pcm, rebuilt, bytes};
+    if (!j || rb_async(writer, store_job_run, j)) {
+        free(j); free(pcm); free(mix); free(key); free(model);
+        writer_done(bytes);
+    }
+}
+
 static OrtStatus *ORT_API_CALL hook_Run(OrtSession *s, const OrtRunOptions *ro, const char *const *in_names,
                                         const OrtValue *const *inputs, size_t n_in, const char *const *out_names,
                                         size_t n_out, OrtValue **outputs) {
@@ -2652,7 +2723,7 @@ static OrtStatus *ORT_API_CALL hook_Run(OrtSession *s, const OrtRunOptions *ro, 
         got = 0;
     }
     if (got && serve(pcm, mix.data, L, 0, mean, std, xdims, xtdims, ix, ixt, outputs) == 0) {
-        futimes(touch, NULL);                               /* last used: now */
+        rb_futimes_now(touch);                               /* last used: now */
         close(touch);
         rb_lock(&lock);
         long long h = ++hits, nh = near_hits, m = misses;
@@ -2666,11 +2737,7 @@ static OrtStatus *ORT_API_CALL hook_Run(OrtSession *s, const OrtRunOptions *ro, 
                 memcpy(mixc, mix.data, mix.count * sizeof(float));
                 int16_t *pc = pcm;
                 pcm = NULL;
-                dispatch_async(writer, ^{
-                    store_entry(mdl, kk, pc, mixc, L, 0, 0);
-                    free(pc); free(mixc); free(kk); free(mdl);
-                    writer_done(bytes);
-                });
+                queue_store(mdl, kk, pc, mixc, L, 0, 0, bytes);
             } else {
                 free(mixc); free(kk); free(mdl);
             }
@@ -2709,7 +2776,7 @@ static OrtStatus *ORT_API_CALL hook_Run(OrtSession *s, const OrtRunOptions *ro, 
             else if (!residual_ok(pcm, mix.data, L, d, &cands[k], &worst, &t0, &t1)) why = "residual";
         }
         if (!why && serve(pcm, mix.data, L, d, mean, std, xdims, xtdims, ix, ixt, outputs) == 0) {
-            futimes(touch, NULL);
+            rb_futimes_now(touch);
             close(touch);
             rb_lock(&lock);
             long long h = hits, nh = ++near_hits, m = misses;
@@ -2774,11 +2841,7 @@ static OrtStatus *ORT_API_CALL hook_Run(OrtSession *s, const OrtRunOptions *ro, 
         return st;
     }
     memcpy(mixc, mix.data, mix.count * sizeof(float));
-    dispatch_async(writer, ^{
-        store_entry(mdl, kk, pcm, mixc, L, 1, rebuilt);
-        free(pcm); free(mixc); free(kk); free(mdl);
-        writer_done(bytes);
-    });
+    queue_store(mdl, kk, pcm, mixc, L, 1, rebuilt, bytes);
     return st;
 }
 
@@ -2806,24 +2869,49 @@ static const char *ORT_API_CALL bridge_GetVersionString(void) {
 
 static OrtApiBase bridge_base = {bridge_GetApi, bridge_GetVersionString};
 
+/* The exports, with the ordinals of Pioneer's onnxruntime.dll (exports.def): rekordbox.exe and
+ * Demucs3.dll import OrtGetApiBase (@1) and OrtSessionOptionsAppendExecutionProvider_DML (@4) by
+ * ordinal. The three providers pass through to the real library's own. */
 EXPORT const OrtApiBase *ORT_API_CALL OrtGetApiBase(void) NO_EXCEPTION {
     rb_once(&once, load_real);
     return hooks_ok ? &bridge_base : real_base;
 }
 
-/* the two other functions rekordbox imports from the library, passed through */
-EXPORT OrtStatus *OrtSessionOptionsAppendExecutionProvider_CPU(OrtSessionOptions *o, int use_arena) {
+static FARPROC real_proc(const char *name) {
     rb_once(&once, load_real);
-    static OrtStatus *(*f)(OrtSessionOptions *, int);
-    if (!f && real_handle) f = (OrtStatus * (*)(OrtSessionOptions *, int)) dlsym(real_handle, "OrtSessionOptionsAppendExecutionProvider_CPU");
-    if (f) return f(o, use_arena);
-    return R ? R->CreateStatus(ORT_FAIL, "rbstems bridge: real CPU provider missing") : NULL;
+    return real_handle ? GetProcAddress(real_handle, name) : NULL;
 }
 
-EXPORT OrtStatus *OrtSessionOptionsAppendExecutionProvider_CoreML(OrtSessionOptions *o, uint32_t flags) {
-    rb_once(&once, load_real);
-    static OrtStatus *(*f)(OrtSessionOptions *, uint32_t);
-    if (!f && real_handle) f = (OrtStatus * (*)(OrtSessionOptions *, uint32_t)) dlsym(real_handle, "OrtSessionOptionsAppendExecutionProvider_CoreML");
-    if (f) return f(o, flags);
-    return R ? R->CreateStatus(ORT_FAIL, "rbstems bridge: real CoreML provider missing") : NULL;
+static OrtStatus *missing(const char *what) {
+    return R ? R->CreateStatus(ORT_FAIL, what) : real_base && real_base->GetApi(ORT_API_VERSION)
+           ? real_base->GetApi(ORT_API_VERSION)->CreateStatus(ORT_FAIL, what) : NULL;
+}
+
+EXPORT OrtStatus *ORT_API_CALL OrtSessionOptionsAppendExecutionProvider_CPU(OrtSessionOptions *o, int use_arena) {
+    static OrtStatus *(ORT_API_CALL *f)(OrtSessionOptions *, int);
+    if (!f) f = (OrtStatus *(ORT_API_CALL *)(OrtSessionOptions *, int))(void *)real_proc("OrtSessionOptionsAppendExecutionProvider_CPU");
+    return f ? f(o, use_arena) : missing("rbstems bridge: real CPU provider missing");
+}
+
+EXPORT OrtStatus *ORT_API_CALL OrtSessionOptionsAppendExecutionProvider_DML(OrtSessionOptions *o, int device_id) {
+    static OrtStatus *(ORT_API_CALL *f)(OrtSessionOptions *, int);
+    if (!f) f = (OrtStatus *(ORT_API_CALL *)(OrtSessionOptions *, int))(void *)real_proc("OrtSessionOptionsAppendExecutionProvider_DML");
+    return f ? f(o, device_id) : missing("rbstems bridge: real DirectML provider missing");
+}
+
+/* (OrtSessionOptions*, IDMLDevice*, ID3D12CommandQueue*): the COM pointers pass through untouched */
+EXPORT OrtStatus *ORT_API_CALL OrtSessionOptionsAppendExecutionProviderEx_DML(OrtSessionOptions *o, void *dml_device, void *queue) {
+    static OrtStatus *(ORT_API_CALL *f)(OrtSessionOptions *, void *, void *);
+    if (!f) f = (OrtStatus *(ORT_API_CALL *)(OrtSessionOptions *, void *, void *))(void *)real_proc("OrtSessionOptionsAppendExecutionProviderEx_DML");
+    return f ? f(o, dml_device, queue) : missing("rbstems bridge: real DirectML provider missing");
+}
+
+/* the bridge's own module, so that open_real can tell itself from the real library */
+BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved) {
+    (void)reserved;
+    if (reason == DLL_PROCESS_ATTACH) {
+        self_module = h;
+        DisableThreadLibraryCalls(h);
+    }
+    return TRUE;
 }
