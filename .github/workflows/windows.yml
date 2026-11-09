@@ -57,7 +57,7 @@ jobs:
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
-          install: mingw-w64-x86_64-gcc make python unzip curl tar xz mingw-w64-x86_64-ffmpeg
+          install: mingw-w64-x86_64-gcc make python unzip curl tar xz
       - name: "the bridge's tests (native, the ACL check included)"
         shell: msys2 {0}
         run: bridge/win/tests/run.sh
