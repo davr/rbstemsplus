@@ -219,7 +219,13 @@ try {
     Start-Sleep -Milliseconds 500
     New-Item -ItemType Directory -Force -Path $dest | Out-Null
     $exe = Join-Path $dest "RBStemsPlus.exe"
-    if (Test-Path $exe) { Move-Item -Force $exe "$exe.old" }
+    if (Test-Path $exe) {
+        # the last install's .old may still be the running app's file: try to clear it, else use another name
+        $old = "$exe.old"
+        if (Test-Path $old) { Remove-Item -Force $old -ErrorAction SilentlyContinue }
+        if (Test-Path $old) { $old = "$exe.old-" + (Get-Date -Format "yyyyMMddHHmmss") }
+        Move-Item -Force $exe $old
+    }
     Copy-Item -Force (Join-Path $tmp "app\*") $dest
     # the Start menu shortcut
     $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) "RB Stems Plus.lnk"

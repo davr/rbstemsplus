@@ -14,12 +14,20 @@ $id = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not (New-Object Security.Principal.WindowsPrincipal $id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw "run this from an elevated (Administrator) PowerShell" }
 $root = Join-Path $env:ProgramData "rbstemsplus"
 $dest = Join-Path $root "ort-cuda"
-if ($Remove) { if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }; "removed $dest"; return }
+function Remove-Item-Forced($d) {                       # also a folder an earlier run left with unreadable files
+    takeown /f $d /r /d y | Out-Null
+    icacls $d /reset /t /c | Out-Null
+    Remove-Item -Recurse -Force $d
+}
+if ($Remove) { if (Test-Path $dest) { Remove-Item-Forced $dest }; "removed $dest"; return }
 if (-not $Source -or -not (Test-Path (Join-Path $Source "onnxruntime.dll"))) { throw "-Source must be a folder with the CUDA onnxruntime.dll" }
 if (-not (Test-Path $root)) { throw "$root doesn't exist: install RB Stems Plus first" }
-if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+if (Test-Path $dest) { Remove-Item-Forced $dest }
 New-Item -ItemType Directory $dest | Out-Null
+# the folder's own ACL first (no inheritance from ProgramData, Administrators/SYSTEM full, Users read and run, all
+# inheritable), then the files made inside it inherit exactly that: breaking inheritance on the files left them unreadable
+icacls $dest /inheritance:r | Out-Null
+icacls $dest /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-545:(OI)(CI)RX" | Out-Null
+icacls $dest /setowner "*S-1-5-32-544" | Out-Null
 Copy-Item (Join-Path $Source "*.dll") $dest
-icacls $dest /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-545:(OI)(CI)RX" /T /C | Out-Null
-icacls $dest /setowner "*S-1-5-32-544" /T /C | Out-Null
 "installed $((Get-ChildItem $dest).Count) files in $dest"
