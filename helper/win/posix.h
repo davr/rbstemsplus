@@ -5,8 +5,13 @@
 #ifndef RBSP_WIN_POSIX_H
 #define RBSP_WIN_POSIX_H
 #define _POSIX_C_SOURCE 200809L
+#define __USE_MINGW_ANSI_STDIO 1
 #define _DIRENT_H_                      /* mingw's dirent.h (ANSI paths): this file has its own */
 #include <sys/stat.h>                   /* before `stat` becomes a macro */
+#include <stdbool.h>
+#ifndef _Frees_ptr_opt_
+#define _Frees_ptr_opt_            /* onnxruntime_c_api.h: an SAL annotation */
+#endif
 #include <sys/types.h>
 #include <unistd.h>
 #include "../../bridge/win/win_compat.h"
@@ -92,7 +97,7 @@ static ssize_t pread(int fd, void *buf, size_t n, off_t off) {      /* one threa
 
 /* ---------------------------------------------------------------- folders */
 
-typedef struct { char (*names)[RB_PATH_MAX]; size_t n, i, cap; } DIR;
+typedef struct { char (*names)[RB_PATH_MAX]; size_t n, i, cap; int fd; } DIR;
 struct dirent { char d_name[RB_PATH_MAX]; };
 static int rbp_dir_add(void *ctx, const char *name, const struct rb_stat *st) {
     DIR *d = ctx;
@@ -106,16 +111,17 @@ static int rbp_dir_add(void *ctx, const char *name, const struct rb_stat *st) {
     rb_strlcpy(d->names[d->n++], name, RB_PATH_MAX);
     return 0;
 }
-/* the folder's whole listing at once; fd is closed by closedir only when opendir made it */
+/* the folder's whole listing at once; closedir closes fd (as fdopendir owns it) */
 static DIR *fdopendir(int fd) {
     DIR *d = calloc(1, sizeof *d);
     if (d && rb_each_name(fd, rbp_dir_add, d)) { free(d->names); free(d); d = NULL; }
+    if (d) d->fd = fd;
     return d;
 }
 static DIR *opendir(const char *path) {
     int fd = rb_openat(AT_FDCWD, path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
     DIR *d = fd >= 0 ? fdopendir(fd) : NULL;
-    if (fd >= 0) close(fd);
+    if (fd >= 0 && !d) close(fd);
     return d;
 }
 static struct dirent *readdir(DIR *d) {
@@ -124,7 +130,7 @@ static struct dirent *readdir(DIR *d) {
     rb_strlcpy(e.d_name, d->names[d->i++], sizeof e.d_name);
     return &e;
 }
-static int closedir(DIR *d) { if (d) { free(d->names); free(d); } return 0; }
+static int closedir(DIR *d) { if (d) { if (d->fd >= 0) close(d->fd); free(d->names); free(d); } return 0; }
 
 /* ---------------------------------------------------------------- getline */
 
@@ -158,4 +164,72 @@ static void *dlopen(const char *path, int flags) {
     return h;
 }
 #define dlsym(h, name) ((void *)GetProcAddress((HMODULE)(h), (name)))
+
+/* ---------------------------------------------------------------- the rest prepare.c uses */
+
+#include <signal.h>
+#include <wchar.h>
+static FILE *rbp_fopen(const char *path, const char *mode) {      /* UTF-8 path */
+    wchar_t *w = rb_wide(path), wm[8];
+    FILE *f = NULL;
+    size_t i = 0;
+    for (; mode[i] && i < 7; i++) wm[i] = (wchar_t)mode[i];
+    wm[i] = 0;
+    if (w) f = _wfopen(w, wm);
+    free(w);
+    return f;
+}
+#define fopen rbp_fopen
+
+#define AT_REMOVEDIR 0x200
+static int utimensat(int dir, const char *name, const void *times, int flag) {      /* times NULL: now */
+    int fd = rb_openat(dir, name, O_RDONLY | (flag & AT_SYMLINK_NOFOLLOW ? O_NOFOLLOW : 0));
+    int r;
+    (void)times;
+    if (fd < 0) return -1;
+    r = rb_futimes_now(fd);
+    close(fd);
+    return r;
+}
+
+struct statfs { unsigned long long f_bsize, f_blocks, f_bavail; };
+static int rbp_statfs(const char *path, struct statfs *fs) {
+    wchar_t *w = rb_wide(path);
+    ULARGE_INTEGER avail, total, freeb;
+    BOOL ok = w && GetDiskFreeSpaceExW(w, &avail, &total, &freeb);
+    free(w);
+    if (!ok) return -1;
+    fs->f_bsize = 4096;
+    fs->f_blocks = total.QuadPart / 4096;
+    fs->f_bavail = avail.QuadPart / 4096;
+    return 0;
+}
+#define statfs(path, fs) rbp_statfs((path), (fs))
+
+#undef CLOCK_MONOTONIC
+#define CLOCK_MONOTONIC 1
+static int rbp_clock_gettime(int clk, struct timespec *ts) {
+    LARGE_INTEGER f, c;
+    (void)clk;
+    QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&c);
+    ts->tv_sec = (time_t)(c.QuadPart / f.QuadPart);
+    ts->tv_nsec = (long)((c.QuadPart % f.QuadPart) * 1000000000LL / f.QuadPart);
+    return 0;
+}
+#define clock_gettime rbp_clock_gettime
+
+/* a Windows path: C:\... or C:/... or \\server\... (prepare.c's "path[0] != '/'") */
+static int rbp_abs(const char *p) { return (((p[0] | 32) >= 'a' && (p[0] | 32) <= 'z') && p[1] == ':' && (p[2] == '\\' || p[2] == '/')) || (p[0] == '\\' && p[1] == '\\'); }
+
+static const wchar_t *rbp_wide_path(const char *p) { return rb_wide(p); }      /* ONNX Runtime's ORTCHAR_T; lives to the exit */
+
+static const char *dlerror(void) { return "LoadLibrary failed"; }
+
+/* glue_win.c: SIGTERM = the stop event (Local\rbsp-prepare-<pid>-stop), SIGINT = Ctrl+C;
+ * rbp_pause_wait blocks while the pause event is set */
+typedef void (*rbp_handler)(int);
+rbp_handler rbp_signal(int sig, rbp_handler fn);
+void rbp_pause_wait(void);
+#define signal rbp_signal
 #endif
