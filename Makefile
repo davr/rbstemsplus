@@ -4,6 +4,7 @@
 #   make app      only dist/rbstemsplus-app.zip
 #   make bridge   only the bridge, into build/bridge/
 #   make helper   the prepare helper (helper/build.sh), into build/helper/: not released yet
+#   make helper-win  the Windows prepare helper, rbsp-prepare.exe (helper/win/build.sh, mingw-w64), into build/helper-win/
 #   make check    quick checks: shell syntax, the two Info.plist files
 #   make test     the app's safety checks (app/Tests), built from the app's sources and run
 #   make bridge-test  the bridge's tests (bridge/tests/run.sh, disk images included), again with
@@ -15,7 +16,7 @@
 #   make bridge-win    only the Windows bridge, into build/bridge-win/
 #   make windows-test  the Windows bridge's tests (under wine on Linux) and the app's tests
 
-.PHONY: all app bridge helper check test bridge-test clean windows bridge-win windows-test
+.PHONY: all app bridge helper helper-win helper-win-test check test bridge-test clean windows bridge-win windows-test
 
 all:
 	scripts/build.sh
@@ -39,6 +40,12 @@ windows-test:
 helper:
 	helper/build.sh build/helper
 
+helper-win:
+	helper/win/build.sh build/helper-win
+
+helper-win-test:
+	helper/win/tests/run.sh
+
 check:
 	bash -n scripts/build-windows.sh
 	sh -n bridge/win/build.sh
@@ -53,6 +60,8 @@ check:
 	bash -n bridge/tests/run.sh
 	bash -n bridge/tests/location.sh
 	sh -n helper/build.sh
+	sh -n helper/win/build.sh
+	bash -n helper/win/tests/run.sh
 	helper/tests/same-as-bridge.sh
 	plutil -lint app/Info.plist
 	plutil -lint app/Watcher-Info.plist

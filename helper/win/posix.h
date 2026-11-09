@@ -199,6 +199,9 @@ static int rbp_statfs(const char *path, struct statfs *fs) {
     BOOL ok = w && GetDiskFreeSpaceExW(w, &avail, &total, &freeb);
     free(w);
     if (!ok) return -1;
+#ifdef RBP_TEST                                 /* tests: a roomy disk, whatever this one has */
+    if (getenv("RBSP_TEST_FREE_GB")) { total.QuadPart = 1000ULL << 30; avail.QuadPart = (unsigned long long)atoi(getenv("RBSP_TEST_FREE_GB")) << 30; }
+#endif
     fs->f_bsize = 4096;
     fs->f_blocks = total.QuadPart / 4096;
     fs->f_bavail = avail.QuadPart / 4096;

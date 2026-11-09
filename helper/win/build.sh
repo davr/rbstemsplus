@@ -4,7 +4,8 @@
 # to it), plus the Windows files here (decode, library, kept sets, glue). libFLAC is built from the
 # bridge's tarball (version and sha256 from bridge/win/build.sh).
 #
-#   helper/win/build.sh [OUT]       into OUT (default build/helper-win)
+#   helper/win/build.sh [--test] [OUT]   into OUT (default build/helper-win). --test (for tests/run.sh only):
+#                                        the model named by $RBSP_TEST_OURS counts as ours (the tests' tiny model)
 #
 # rekordbox's library key isn't in this repository: as helper/build.sh does, it is the one
 # pyrekordbox publishes, both files fetched from a pinned commit (sha256-checked), or read from
@@ -13,6 +14,8 @@ set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 hs="$root/helper"
+test_ours=
+if [ "${1:-}" = "--test" ]; then test_ours=1; shift; fi
 out="${1:-$root/build/helper-win}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
@@ -108,11 +111,15 @@ PY
 rm -f "$obj/libkey.raw"
 
 # ---------------------------------------------------------------- the program
-cflags="-O2 -std=gnu11 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter -Wno-cast-function-type -Wno-unused-result -DFLAC__NO_DLL -D_FILE_OFFSET_BITS=32"
+cflags="${test_ours:+-DRBP_TEST }-O2 -std=gnu11 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter -Wno-cast-function-type -Wno-unused-result -DFLAC__NO_DLL -D_FILE_OFFSET_BITS=32"
 inc="-include $here/posix.h -I$here -I$obj -I$hs -I$root/bridge -I$flac/include"
 cc() { "$CC" $cflags $inc "$@"; }
 # prepare.c: its absolute-path test is a Unix one ('/'): the same file, that test replaced, main renamed
 sed "s|path\[0\] != '/'|!rbp_abs(path)|g" "$hs/prepare.c" > "$obj/prepare_gen.c"
+if [ -n "$test_ours" ]; then
+  sed -i 's|int ours = !strcmp(fp, OURS_V4);|int ours = !strcmp(fp, getenv("RBSP_TEST_OURS") ? getenv("RBSP_TEST_OURS") : OURS_V4);|' "$obj/prepare_gen.c"
+  grep -q 'RBSP_TEST_OURS' "$obj/prepare_gen.c" || { echo "helper/prepare.c changed: the model test line no longer matches" >&2; exit 1; }
+fi
 [ "$(grep -c 'rbp_abs(path)' "$obj/prepare_gen.c")" = 2 ] || { echo "helper/prepare.c changed: its two path tests no longer match helper/win/build.sh's" >&2; exit 1; }
 cc -Dmain=prepare_main -c "$obj/prepare_gen.c" -o "$obj/prepare.o"
 # model.c: ONNX Runtime takes a UTF-16 path here; main's model_run is glue_win.c's (it waits while paused)

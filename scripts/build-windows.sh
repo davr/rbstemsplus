@@ -1,6 +1,6 @@
 #!/bin/bash
 # Builds the Windows release assets into dist/ (next to the macOS ones scripts/build.sh makes):
-#   rbstemsplus-windows.zip     the app: RBStemsPlus.exe (single file, self-contained, x64), NOTICE, LICENSE
+#   rbstemsplus-windows.zip     the app: RBStemsPlus.exe (single file, self-contained, x64), rbsp-prepare.exe (the prepare helper), NOTICE, LICENSE
 #   onnxruntime.dll             the Windows bridge (bridge/win/build.sh)
 #   stemsplus-model.onnx        the model: shared with macOS (already in dist/, or RBSTEMSPLUS_MODEL)
 #   bootstrap.ps1               the pasted installer (scripts/bootstrap.ps1, the public keys written in)
@@ -85,6 +85,11 @@ cp "$root/build/bridge-win/$bridge" "$dist/$bridge"
 # not part of the signed payload: a diagnostic tool, published next to it (rbsp-bench.exe)
 "$root/bridge/win/build.sh" --bench "$dist" > "$root/build/bench-win.log" 2>&1 || { tail -20 "$root/build/bench-win.log"; die "rbsp-bench didn't build"; }
 
+echo "== the prepare helper"
+# rbsp-prepare.exe (helper/win/): next to RBStemsPlus.exe in the app's zip (and unzipped into dist, for the CI artifact)
+"$root/helper/win/build.sh" "$root/build/helper-win" > "$root/build/helper-win.log" 2>&1 || { tail -20 "$root/build/helper-win.log"; die "rbsp-prepare didn't build"; }
+cp "$root/build/helper-win/rbsp-prepare.exe" "$dist/rbsp-prepare.exe"
+
 echo "== the app"
 command -v dotnet > /dev/null || die "dotnet not found (Microsoft's .NET 8 SDK)"
 pub="$root/build/windows-publish"
@@ -96,11 +101,11 @@ dotnet publish "$root/windows/RBStemsPlus/RBStemsPlus.csproj" -c Release -o "$pu
 if [ -z "$test_base" ]; then
   if grep -aq "TEST BUILD" "$pub/RBStemsPlus.exe"; then die "a release app contains the test build note"; fi
 fi
-python3 -I - "$pub/RBStemsPlus.exe" "$root/NOTICE" "$root/LICENSE" "$dist/$app_zip" <<'EOF'
+python3 -I - "$pub/RBStemsPlus.exe" "$root/NOTICE" "$root/LICENSE" "$dist/$app_zip" "$dist/rbsp-prepare.exe" <<'EOF'
 import sys, zipfile
-exe, notice, lic, out = sys.argv[1:]
+exe, notice, lic, out, helper = sys.argv[1:]
 with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-    for path, name in ((exe, "RBStemsPlus.exe"), (notice, "NOTICE"), (lic, "LICENSE")):
+    for path, name in ((exe, "RBStemsPlus.exe"), (helper, "rbsp-prepare.exe"), (notice, "NOTICE"), (lic, "LICENSE")):
         info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))   # fixed date: the same bytes each build
         info.compress_type = zipfile.ZIP_DEFLATED
         info.external_attr = 0o644 << 16

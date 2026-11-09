@@ -87,6 +87,8 @@ SQLCipher (compiled into the prepare helper)
 The prepare helper reads the playlists of rekordbox's library (master.db, an
 encrypted SQLite database), read only, with SQLCipher 4.19.0, built from its
 release with Apple's CommonCrypto. SQLite itself is in the public domain.
+The Windows prepare helper (rbsp-prepare.exe) includes none of it: it loads the
+sqlite3.dll that rekordbox itself installs, and calls it.
 
   https://www.zetetic.net/sqlcipher/
   Copyright (c) 2025, ZETETIC LLC

@@ -5,9 +5,9 @@ name: windows
 
 on:
   push:
-    paths: ["bridge/win/**", "windows/**", "scripts/build-windows.sh", "scripts/bootstrap.ps1", "tests/**", ".github/workflows/windows.yml"]
+    paths: ["bridge/win/**", "helper/**", "windows/**", "scripts/build-windows.sh", "scripts/bootstrap.ps1", "tests/**", ".github/workflows/windows.yml"]
   pull_request:
-    paths: ["bridge/win/**", "windows/**", "scripts/build-windows.sh", "scripts/bootstrap.ps1", "tests/**", ".github/workflows/windows.yml"]
+    paths: ["bridge/win/**", "helper/**", "windows/**", "scripts/build-windows.sh", "scripts/bootstrap.ps1", "tests/**", ".github/workflows/windows.yml"]
   workflow_dispatch:
 
 permissions:
@@ -27,6 +27,8 @@ jobs:
         with: { dotnet-version: "8.0.x" }
       - name: "the bridge's tests (wine)"
         run: RBSTEMS_NO_SKIP= bridge/win/tests/run.sh
+      - name: "the prepare helper's tests (wine)"
+        run: RBSTEMS_NO_SKIP=1 helper/win/tests/run.sh
       - name: "the app's tests"
         run: dotnet test windows/RBStemsPlus.Tests
       - name: "a test build"
@@ -40,6 +42,7 @@ jobs:
             dist-test/rbstemsplus-windows.zip
             dist-test/onnxruntime.dll
             dist-test/rbsp-bench.exe
+            dist-test/rbsp-prepare.exe
             dist-test/bootstrap.ps1
             dist-test/payload-windows.json
             dist-test/payload-windows.json.sig
@@ -58,6 +61,10 @@ jobs:
       - name: "the bridge's tests (native, the ACL check included)"
         shell: msys2 {0}
         run: bridge/win/tests/run.sh
+      - name: "the prepare helper's tests (native)"
+        if: success() || failure()
+        shell: msys2 {0}
+        run: helper/win/tests/run.sh
       # the rest runs whatever the bridge's tests said: each checks something else
       - uses: actions/setup-dotnet@v4
         if: success() || failure()

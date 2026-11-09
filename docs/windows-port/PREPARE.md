@@ -43,10 +43,23 @@ In the library (69 files profiled by `ffprobe`), 59 of 60 M4A, 38 of 40 FLAC and
 - Same format of kept sets, manifests and entries as macOS (kept files are byte-identical).
 
 ## Helper status (`rbsp-prepare.exe`, branch `integrate/upstream-1.3.0`)
-Running log; newest last.
-- **Shim (`helper/win/posix.h`)**: the POSIX calls upstream's sources use (stat with nanosecond mtime, openat family,
-  directory listing, dlopen, getline) over `bridge/win/win_compat.h`. Upstream `manifest.c`, `mp4.c`, `resample.c`
-  and `mp3.c` compile **unchanged** with mingw-w64 (`-include win/posix.h`). Compiled only; not yet linked or run.
-- **Not started**: CLI (`prepare_win.c`), library reader (SQLCipher via rekordbox's `sqlite3.dll`), kept sets,
-  entry writer, model run, FLAC/AIFF/WAV decode, Media Foundation AAC, build script, CI.
-- **Cannot be tested here**: anything needing rekordbox's DLLs, Media Foundation, a real `master.db`.
+Running log; newest last. Build: `make helper-win` (`helper/win/build.sh`); tests: `make helper-win-test` (wine).
+- **Shim (`helper/win/posix.h` and the stub headers beside it)**: the POSIX, vDSP, CommonCrypto, CoreFoundation, fts,
+  statfs and dlopen calls upstream's sources use, over `bridge/win/win_compat.h`. **Unchanged upstream files**:
+  `manifest.c`, `mp3.c`, `mp4.c`, `resample.c`, `entry.c`, `model.c`, `prepare.c`. Two of them get a one-line `sed`
+  at build time (`prepare.c`: the Unix absolute-path test; `model.c`: ONNX Runtime's UTF-16 model path); the build
+  stops if the line they match ever changes. `main` and `model_run` are wrapped by `glue_win.c`.
+- **Windows versions**: `decode_win.c` (probe and decode), `kept_win.c` (kept.c with its clang blocks as a callback and
+  `%APPDATA%\rbstemsplus\kept`), `library_win.c` (library.c over rekordbox's own `sqlite3.dll`: no SQLCipher in our
+  binary), `big_win.c`, `readable_win.c`, `glue_win.c`.
+- **Works (tested under wine, `helper/win/tests/run.sh`, 22 checks)**: usage and refusals; `--estimate`; a run with a
+  tiny model through Microsoft's ONNX Runtime: entries written under the **same keys an independent Python
+  implementation of rekordbox's chunking computes** (WAV, and AIFF decodes to the same entries), kept set, manifest,
+  "unchanged since it was prepared" on a second run, estimate "ready" afterwards; the app's **stop** event
+  (`Local\rbsp-prepare-<pid>-stop`: finishes the chunk, writes the set, final line, exit 0), **pause** event (blocks
+  before the next model run until reset; stop still gets through a pause).
+- **Written, not testable here**: FLAC and MP3 decode (MP3 needs rekordbox's `libmpg123.dll`; FLAC decode compiles and
+  is the libFLAC stream decoder), AAC through Media Foundation (wine has no AAC decoder), the library reader (needs
+  rekordbox's `sqlite3.dll` and the key), `--playlists` / `--tracks`.
+- **Not done**: ALAC (reported as skipped, "not supported on Windows yet"), the CUDA path, other sample rates (skipped,
+  by decision), a test of the library reader against a plain SQLite build, a wine test of FLAC.
