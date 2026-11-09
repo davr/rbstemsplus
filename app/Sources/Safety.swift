@@ -232,11 +232,14 @@ func registrationRecord(exe: String, identity: String) -> String { exe + "\n" + 
 /// Deletes this app's preferences (macOS's own, e.g. the folder chooser's last folder) once this
 /// process has exited, so nothing writes them back: `defaults delete` empties them (through
 /// cfprefsd), then, once cfprefsd has written that out, the file it leaves empty goes (deleted at
-/// once, cfprefsd writes it back) (run by afterExit before selfDeleteScript:
+/// once, cfprefsd writes it back). First its privacy permissions go (Files and Folders, App
+/// Management: `tccutil reset`, which finds the app by its bundle ID only while the app is still
+/// there) (run by afterExit before selfDeleteScript:
 /// $2 our bundle ID: only a domain of ours is deleted, io.github.rbstemsplus.*, so the tests use
 /// their own). Then, with no app given ($1 empty), nothing more.
 let ownPrefsDeleteScript = """
     case "$2" in io.github.rbstemsplus.*)
+        /usr/bin/tccutil reset All "$2" >/dev/null 2>&1
         /usr/bin/defaults delete "$2" >/dev/null 2>&1
         /bin/sleep 2
         [ -n "$HOME" ] && /bin/rm -f "$HOME/Library/Preferences/$2.plist" ;;

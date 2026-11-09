@@ -259,6 +259,8 @@ extension Controller {
     /// on this Mac: the process check sees them all).
     /// Seam: resume after quit (wait for rekordbox to quit, then carry on) replaces the alert here.
     func preflight() -> Bool {
+        // a playlist being prepared reads the model and writes the cache: stopped first
+        guard confirmStopPreparing("Continue") else { return false }
         if pioneerUpdating(), let p = Controller.rootProblem(RootExit.installerRunning) { _ = alert(p.title, p.body, ["OK"]); return false }
         if rekordboxOpen() { _ = alert("rekordbox open", "Quit rekordbox (also in other accounts on this Mac), then try again.", ["OK"]); return false }
         return true
@@ -304,7 +306,7 @@ extension Controller {
     /// runs on the work queue. Main thread.
     func start(_ id: String, _ label: String, _ status: String, _ body: @escaping () -> Void) {
         currentAction = Action(id: id, label: label)
-        busy(status)
+        busyInFront(status)
         work.async(execute: body)
     }
 
@@ -327,6 +329,21 @@ extension Controller {
     @objc func reinstallAction() {
         guard preflight(), confirm(reinstallBtn.title, "Reinstall", installNote(reinstallBtn.title, reinstall: true, paused: cachePausedNow(), drive: LocationMonitor.shared.snapshot().drive)) else { return }
         reinstallChosen()
+    }
+
+    /// Each feature's own Reinstall (the Manage tab): that feature only, refreshed.
+    @objc func reinstallPlusAction() {
+        guard preflight(), confirm(reinstallPlusBtn.title, "Reinstall", installNote(reinstallPlusBtn.title, reinstall: true, paused: nil)) else { return }
+        startReinstallOne("reinstall-plus", reinstallPlusBtn.title, model: true)
+    }
+
+    @objc func reinstallCacheAction() {
+        guard preflight(), confirm(reinstallCacheBtn.title, "Reinstall", installNote(reinstallCacheBtn.title, reinstall: true, paused: cachePausedNow(), drive: LocationMonitor.shared.snapshot().drive)) else { return }
+        startReinstallOne("reinstall-cache", reinstallCacheBtn.title, model: false)
+    }
+
+    func startReinstallOne(_ id: String, _ label: String, model: Bool) {
+        start(id, label, "Reinstalling…") { self.install(model: model, cache: !model, force: true) }
     }
 
     /// Reinstalls exactly what the user chose, refreshing what is still there (the Reinstall button).
@@ -573,6 +590,8 @@ extension Controller {
         case "install-plus": startInstall(left.id, left.label, model: true, cache: false)
         case "install-cache": startInstall(left.id, left.label, model: false, cache: true)
         case "reinstall": reinstallChosen()
+        case "reinstall-plus": startReinstallOne(left.id, left.label, model: true)
+        case "reinstall-cache": startReinstallOne(left.id, left.label, model: false)
         case "reinstall-missing": if !reinstallMissing() { setBusyMarker(nil); return false }
         case "update-cache": startCacheUpdate()
         case "uninstall-plus": startUninstallStemsPlus(left.label)

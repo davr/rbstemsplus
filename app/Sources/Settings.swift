@@ -43,7 +43,7 @@ extension Controller {
                 guard let d = d, maxDaysRange.contains(d) else {
                     _ = alert("Days out of range", "Enter a number of days from 1 to 36,500.", ["OK"]); continue
                 }
-                if writeConfig(maxGB: g, maxDays: d) { log("settings: max_gb=\(configNumber(g)) max_days=\(configNumber(d))") }
+                if writeConfig(maxGB: g, maxDays: d) { log("settings: max_gb=\(configNumber(g)) max_days=\(configNumber(d))"); prepareChanged() }
                 else {
                     log("settings: couldn't write \(configFile)")
                     _ = alert("Settings not saved", "RB Stems Plus couldn't write its settings file. See the log in this window.", ["OK"])
@@ -69,6 +69,7 @@ extension Controller {
                 let ok = safeRemove(defaultCacheDir, whole: true)
                 log("saved stems cleared\(size): \(ok ? "ok" : cacheIsLink() ? "FAILED (the folder is a link)" : "FAILED")")
                 if !ok { _ = alert("Saved stems not cleared", cacheIsLink() ? cacheLinkLine : "Some saved stems couldn't be deleted. See the log in this window.", ["OK"]) }
+                prepareChanged()
                 LocationMonitor.shared.invalidateSize()
                 LocationMonitor.shared.update(size: true)
                 continue                                        // back to the settings, now without stems

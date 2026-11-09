@@ -190,6 +190,10 @@ func locationTests() {
     check(locationLight(.chosen(dir: gls, id: id, probe: .notConnected), bridge: off, rekordboxRunning: true, mounts: m)
             == "Stems Cache isn't using \"GLS\" right now: the drive isn't connected. Connect it: Stems Cache uses it again by itself.",
           "light: disconnected while rekordbox runs: connect it, no restart")
+    var fine = off; fine.state = "available"; fine.reason = ""
+    check(locationLight(.chosen(dir: gls, id: id, probe: .notConnected), bridge: fine, rekordboxRunning: true, mounts: m)?.contains("Connect it: Stems Cache uses it again by itself.") == true
+            && locationLight(.chosen(dir: gls, id: id, probe: .notConnected), bridge: fine, rekordboxRunning: true, mounts: m)?.contains("restart") == false,
+          "light: unplugged and the running bridge hasn't noticed yet: connect it, no restart")
     for r in ["not-connected", "folder", "marker", "read-only", "not-local", "io-error", "write-failed"] {
         var b = off; b.reason = r
         check(locationLight(.chosen(dir: gls, id: id, probe: .folderMissing), bridge: b, rekordboxRunning: true, mounts: m)?.lowercased().contains("restart") == false,

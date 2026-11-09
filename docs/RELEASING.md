@@ -227,7 +227,10 @@ Engine … yet") until a release lists it:
 - [ ] Update the version in `README.md`/docs if they mention it.
 - [ ] Write the release notes in `docs/release-notes/X.Y.Z.md`: what changed, whether the app
       changed (App Management will ask again), supported rekordbox versions. `release.sh` makes
-      them the draft's notes, and they are published with the release's files.
+      them the draft's notes, and they are published with the release's files. Wrap them like
+      any Markdown here: GitHub keeps every line break of a release's notes as a `<br>`, so
+      `release.sh` uploads them unwrapped (`scripts/unwrap-notes.py`: one line per paragraph and
+      list item). To change a draft's notes by hand, paste that script's output.
 - [ ] Commit everything and push to `origin/main` (the development repository).
 
 ### 2. Check locally
@@ -271,7 +274,6 @@ clone** of the template.
    grep '"commit"' dist-test/payload.json                 # HEAD, no -dirty
    cd dist-test && python3 -m http.server 8765
    ```
-   (or the x2 probe server, `x2/server.py`, which also accepts log uploads).
 2. **Paste as DJ in Terminal:**
    ```sh
    curl -fsSL http://192.168.64.1:8765/bootstrap.sh | RBSTEMSPLUS_BASE_URL=http://192.168.64.1:8765/ bash
@@ -311,7 +313,16 @@ clone** of the template.
    - [ ] a chosen USB stick unplugged and plugged in again with no load meanwhile: the next load
          of a saved track hits at once ("cache: checked again: using" in `bridge.log`), the light
          stays green
-   - [ ] each uninstall, then **Uninstall RB Stems Plus Completely**
+   - [ ] **Prepare** tab (Stems Cache on): a playlist's estimate; Prepare, Pause, Resume, Stop
+         (what is done stays done), Prepare again to finish; the **Status** tab says Ready; in
+         rekordbox every track of it loads as hits (`bridge.log`: "hit" for every chunk, no
+         "miss" line for it)
+   - [ ] tracks in Documents or Downloads, and on a drive: macOS asks once per folder; Allow →
+         they are prepared; Don't Allow → skipped, and the list says why
+   - [ ] rekordbox quit, one prepared track changed (`touch`), rekordbox opened: macOS asks
+         whether RB Stems Plus Watcher may send notifications the first time (Allow), then one
+         notification, "1 track isn't fully prepared"; with nothing changed, none
+   - [ ] each uninstall, then **Uninstall RB Stems Plus…** (in the RB Stems Plus menu)
 5. **Trace audit after the complete uninstall:**
    - [ ] rekordbox's file-tree hash equals the one before the install; `codesign --verify
          --deep --strict` passes and `spctl -a -vv` says "Notarized Developer ID"
@@ -322,6 +333,8 @@ clone** of the template.
          the app, e.g. the folder chooser's last folder: removed a few seconds after it quits),
          LaunchAgent plist or background-item record (`sfltool dumpbtm`); kept in the Dock
          before the uninstall, its icon is gone from the Dock after it
+   - [ ] no RB Stems Plus in System Settings › Privacy & Security › Files and Folders or App
+         Management (when it was allowed there)
    - [ ] with a chosen drive connected: no `RB Stems Plus Cache.noindex` on it, and on exFAT no
          `._RB Stems Plus Cache.noindex` next to where it was; with the drive not connected, the
          final alert names the folder left on it

@@ -29,6 +29,7 @@ func publicReleaseTests() {
 
     // the development repository
     try! fm.copyItem(atPath: fm.currentDirectoryPath + "/scripts/release.sh", toPath: dev + "/scripts/release.sh")
+    try! fm.copyItem(atPath: fm.currentDirectoryPath + "/scripts/unwrap-notes.py", toPath: dev + "/scripts/unwrap-notes.py")
     write(dev + "/scripts/build.sh", """
         #!/bin/bash
         # a fake build: every asset, with the commit it was built from in payload.json
@@ -54,7 +55,7 @@ func publicReleaseTests() {
     try! fm.createDirectory(atPath: dev + "/docs/internal", withIntermediateDirectories: true)
     write(dev + "/docs/internal/vm.md", "the VM\n")
     write(dev + "/docs/public.md", "hello\n")
-    write(dev + "/docs/release-notes/9.9.8.md", "The notes of 9.9.8.\n")
+    write(dev + "/docs/release-notes/9.9.8.md", "The notes\nof 9.9.8.\n")
     let key = dir + "/release-key.pem"
     check(run("/usr/bin/openssl", ["ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", key]).0 == 0
           && run("/usr/bin/openssl", ["ec", "-in", key, "-pubout", "-out", dev + "/keys/release.pub.pem"]).0 == 0
@@ -91,7 +92,8 @@ func publicReleaseTests() {
             mkdir "$st/release" || exit 1
             while [ $# -gt 0 ]; do
               case "$1" in
-                --repo|--title|--notes|--notes-file) echo "$1 $2" >> "$st/args"; shift 2 ;;
+                --notes-file) echo "$1 $2" >> "$st/args"; cp "$2" "$st/notes"; shift 2 ;;
+                --repo|--title|--notes) echo "$1 $2" >> "$st/args"; shift 2 ;;
                 --*) echo "$1" >> "$st/args"; shift ;;
                 *) cp "$1" "$st/release/"; shift ;;
               esac
@@ -176,8 +178,9 @@ func publicReleaseTests() {
                                    ghState + "/release/payload.json.sig", ghState + "/release/payload.json"]).0 == 0,
           "public release: the draft's payload.json is signed with the release key")
     let args = (try? String(contentsOfFile: ghState + "/args", encoding: .utf8)) ?? ""
-    check(args.contains("--draft") && args.contains("--repo Gabe-LS/rbstemsplus") && args.contains("RB Stems Plus (public)/docs/release-notes/9.9.8.md\n") && args.contains("--notes-file /"),
-          "public release: a draft on the public repository, with the version's notes: \(args)")
+    let notes = (try? String(contentsOfFile: ghState + "/notes", encoding: .utf8)) ?? ""
+    check(args.contains("--draft") && args.contains("--repo Gabe-LS/rbstemsplus") && args.contains("--notes-file /") && notes == "The notes of 9.9.8.\n",
+          "public release: a draft on the public repository, with the version's notes unwrapped: \(args) \(notes)")
     r = runInTerminal(["/bin/bash", release, "v9.9.8", "--key", key], env: env, answer: "yes\n")
     check(r.0 != 0 && r.1.contains("GitHub has a release v9.9.8 already"), "public release: a release that exists is never replaced")
 

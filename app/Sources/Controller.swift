@@ -1,6 +1,7 @@
-// The app's window: the name and two status lights on top, the action column on the left, the
-// log on the right. Also the helpers every action uses (log, busy state, dialogs). The actions
-// themselves are in Actions.swift, the admin runs in Admin.swift.
+// The app's window: three toolbar tabs (PrepareView.swift): Status (the two status lights and the
+// prepared playlists), Prepare, and Manage, built here: each feature's actions in the left
+// column, the log on the right. Also the helpers every action uses (log, busy state, dialogs).
+// The actions themselves are in Actions.swift, the admin runs in Admin.swift.
 import AppKit
 
 final class Controller: NSObject {
@@ -13,6 +14,16 @@ final class Controller: NSObject {
     var buttons: [NSButton] = []
     var installPlusBtn = NSButton(), installCacheBtn = NSButton(), reinstallBtn = NSButton(), uninstallPlusBtn = NSButton(), uninstallCacheBtn = NSButton()
     var uninstallAllBtn = NSButton()
+    /// each feature's own Reinstall, and Stems Cache's Settings… (the Manage tab)
+    var reinstallPlusBtn = NSButton(), reinstallCacheBtn = NSButton(), settingsBtn = NSButton()
+    var tabs: MainTabs!
+    var statusTab: StatusTab!
+    private var seenLocation: String?
+    /// prepareChanged came during an action: its end checks, whatever kind of action it was
+    private var changedDuringAction = false
+    /// only coming back to the app came during a wait: its end checks quietly
+    private var quietDuringAction = false
+    var prepareTab: PrepareTab!
     let work = DispatchQueue(label: "rbstemsplus.work")
     var actionRunning = false
     /// The action that is changing things, recorded in the busy marker (see start in Actions.swift).
@@ -38,29 +49,32 @@ final class Controller: NSObject {
     var updateItem: NSMenuItem?
 
     override init() {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 400),
+        window = NSWindow(contentRect: NSRect(origin: .zero, size: tabSizes[Tab.manage.rawValue]),
                           styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         super.init()
         window.delegate = self
         window.title = "RB Stems Plus" + titleNote
-        let title = NSTextField(labelWithString: "RB Stems Plus")
-        title.font = .boldSystemFont(ofSize: 16)
         // two features, each installed on its own; none is the default button (neither is
         // recommended over the other)
         let installPlus = NSButton(title: "Install Demucs v4", target: self, action: #selector(installPlusAction))
         let installCache = NSButton(title: "Install Stems Cache", target: self, action: #selector(installCacheAction))
         let reinstall = NSButton(title: "Reinstall", target: self, action: #selector(reinstallAction))
+        let reinstallPlus = NSButton(title: "Reinstall Demucs v4", target: self, action: #selector(reinstallPlusAction))
+        let reinstallCache = NSButton(title: "Reinstall Stems Cache", target: self, action: #selector(reinstallCacheAction))
+        let settings = NSButton(title: "Settings…", target: self, action: #selector(showSettings))
         let uninstallPlus = NSButton(title: "Uninstall Demucs v4", target: self, action: #selector(uninstallStemsPlus))
         let uninstall = NSButton(title: "Uninstall Stems Cache", target: self, action: #selector(uninstallCache))
         let uninstallAll = NSButton(title: "Uninstall RB Stems Plus Completely", target: self, action: #selector(uninstallEverything))
-        let quit = NSButton(title: "Quit", target: NSApp, action: #selector(NSApplication.terminate(_:)))
-        buttons = [installPlus, installCache, reinstall, uninstallPlus, uninstall, uninstallAll, quit]
+        // in the window: each feature's own; the combined Reinstall (the watcher's request, an
+        // interrupted reinstall) and Uninstall Completely (the app menu) aren't shown
+        buttons = [installPlus, reinstallPlus, uninstallPlus, installCache, reinstallCache, settings, uninstall]
         installPlusBtn = installPlus; installCacheBtn = installCache
         reinstallBtn = reinstall; uninstallPlusBtn = uninstallPlus; uninstallCacheBtn = uninstall
+        reinstallPlusBtn = reinstallPlus; reinstallCacheBtn = reinstallCache; settingsBtn = settings
         uninstallAllBtn = uninstallAll
         spinner.style = .spinning; spinner.controlSize = .small; spinner.isDisplayedWhenStopped = false
         let statusRow = NSStackView(views: [spinner, status])
-        status.preferredMaxLayoutWidth = 260
+        status.preferredMaxLayoutWidth = 240
         status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         statusRow.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let scroll = NSScrollView()
@@ -70,22 +84,15 @@ final class Controller: NSObject {
         text.isEditable = false
         text.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         text.autoresizingMask = [.width]
-        // top line: the app's name on the left, the two status lights on the right (a green check
-        // circle when on, a yellow exclamation circle when installed but not working right now, a
-        // red cross circle when off: shape and colour differ, for colour-blind users)
-        let stateBox = NSStackView(views: [NSStackView(views: [plusIcon, plusLabel]), NSStackView(views: [cacheIcon, cacheLabel])])
-        stateBox.spacing = 18
-        let headerGap = NSView()
-        headerGap.setContentHuggingPriority(.init(1), for: .horizontal)
-        let header = NSStackView(views: [title, headerGap, stateBox])
-        header.alignment = .centerY
-        // below: the actions in the left third, the log (as tall as the actions) in the right two thirds
+        // Manage: each feature's actions in the left third, the log in the right two thirds
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .vertical)
-        let left = NSStackView(views: [installPlus, installCache, reinstall, uninstallPlus, uninstall, spacer, statusRow, uninstallAll, quit])
+        let left = NSStackView(views: [label("Demucs v4", bold: true), installPlus, reinstallPlus, uninstallPlus,
+                                       label("Stems Cache", bold: true), installCache, reinstallCache, settings, uninstall, spacer, statusRow])
         left.orientation = .vertical
         left.alignment = .leading
-        left.spacing = 10
+        left.spacing = 8
+        left.setCustomSpacing(18, after: uninstallPlus)
         for b in buttons {
             b.translatesAutoresizingMaskIntoConstraints = false
             b.widthAnchor.constraint(equalTo: left.widthAnchor).isActive = true
@@ -93,18 +100,33 @@ final class Controller: NSObject {
         let body = NSStackView(views: [left, scroll])
         body.alignment = .top
         body.spacing = 16
-        let root = NSStackView(views: [header, body])
-        root.orientation = .vertical
-        root.alignment = .leading
-        root.spacing = 14
-        root.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 16, right: 16)
-        window.contentView = root
-        header.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -32).isActive = true
-        body.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -32).isActive = true
-        left.widthAnchor.constraint(equalTo: body.widthAnchor, multiplier: 1.0 / 3.0, constant: -8).isActive = true
-        body.heightAnchor.constraint(equalTo: root.heightAnchor, constant: -(14 + 16 + 14 + 24)).isActive = true
-        scroll.heightAnchor.constraint(equalTo: body.heightAnchor).isActive = true
-        left.heightAnchor.constraint(equalTo: body.heightAnchor).isActive = true
+        body.edgeInsets = NSEdgeInsets(top: 16, left: 20, bottom: 16, right: 20)
+        body.frame = NSRect(origin: .zero, size: tabSizes[Tab.manage.rawValue])
+        left.widthAnchor.constraint(equalTo: body.widthAnchor, multiplier: 1.0 / 3.0, constant: -20).isActive = true
+        scroll.heightAnchor.constraint(equalTo: body.heightAnchor, constant: -32).isActive = true
+        left.heightAnchor.constraint(equalTo: body.heightAnchor, constant: -32).isActive = true
+        let manage = NSViewController()
+        manage.view = body
+        manage.preferredContentSize = tabSizes[Tab.manage.rawValue]
+        statusTab = StatusTab(self)
+        prepareTab = PrepareTab(self)
+        tabs = MainTabs()
+        tabs.window = window
+        tabs.tabStyle = .toolbar
+        tabs.transitionOptions = []
+        for (vc, name, symbol) in [(statusTab! as NSViewController, "Status", "checkmark.circle"), (prepareTab! as NSViewController, "Prepare", "music.note.list"),
+                                   (manage, "Manage", "wrench.and.screwdriver")] {
+            let item = NSTabViewItem(viewController: vc)
+            item.label = name
+            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: name)
+            tabs.addTabViewItem(item)
+        }
+        window.contentViewController = tabs
+        if #available(macOS 11.0, *) { window.toolbarStyle = .preference }
+        // Status, or Manage the first time (nothing installed yet)
+        let first: Tab = stemsPlusPresent() || stemsCachePresent() ? .status : .manage
+        tabs.selectedTabViewItemIndex = first.rawValue
+        tabs.tabView(tabs.tabView, didSelect: tabs.tabViewItems[first.rawValue])
         try? FileManager.default.createDirectory(atPath: originalsDir, withIntermediateDirectories: true)
         refresh()                      // buttons in their final state before the window appears
         window.center()
@@ -118,7 +140,16 @@ final class Controller: NSObject {
     /// request.
     func startupChecks() {
         // where the stems are saved, measured in the background from now on (LocationMonitor)
-        LocationMonitor.shared.onChange = { [weak self] in self?.refresh() }
+        LocationMonitor.shared.onChange = { [weak self] in
+            guard let self = self else { return }
+            self.refresh()
+            // the first measurement, the disk under its floor or back, a drive gone or back: what
+            // the Prepare and Status tabs check depends on them
+            let s = LocationMonitor.shared.snapshot()
+            // ... and the light's text, which they show as the reason they can't check
+            let seen = "\(s.status == nil) \(s.pausedFloor ?? -1) \(s.status.flatMap(folderInUse) ?? "") \(s.lightTip ?? "")"
+            if seen != self.seenLocation { self.seenLocation = seen; self.prepareChanged(quiet: true) }
+        }
         LocationMonitor.shared.startObserving()
         work.async {
             // first: the watcher registered for this app's code (after an update or the install
@@ -199,7 +230,9 @@ final class Controller: NSObject {
                                    bridgeModels: own ? bridgeCacheModels() : nil,
                                    model: own ? currentModelSHA(done: { self.refresh() }) : nil,
                                    engine: engineVersion(), pausedFloor: paused, location: loc.lightTip, drive: loc.drive)
-            for (icon, label, light) in [(self.plusIcon, self.plusLabel, plusLight(installed: plus)), (self.cacheIcon, self.cacheLabel, light)] {
+            let pl = plusLight(installed: plus)
+            self.statusTab?.setTips(plus: pl.tip, cache: light.tip)
+            for (icon, label, light) in [(self.plusIcon, self.plusLabel, pl), (self.cacheIcon, self.cacheLabel, light)] {
                 let look = lightDrawing(light.look)
                 icon.image = NSImage(systemSymbolName: look.symbol, accessibilityDescription: look.description)?
                     .withSymbolConfiguration(.init(pointSize: 15, weight: .regular))
@@ -220,9 +253,13 @@ final class Controller: NSObject {
             self.installCacheBtn.isEnabled = cache ? !c.cache && rekordboxInstalled() : cacheWhy == nil
             self.reinstallBtn.isEnabled = (c.model && plusWhy == nil) || (c.cache && cacheWhy == nil)
             self.reinstallBtn.title = "Reinstall " + names(c.model || !c.cache, c.cache)
+            self.reinstallPlusBtn.isEnabled = plus && c.model && plusWhy == nil
+            self.reinstallCacheBtn.isEnabled = cache && c.cache && cacheWhy == nil
+            self.settingsBtn.isEnabled = true
             self.uninstallPlusBtn.isEnabled = plus                     // rekordbox's model back: no password
             self.uninstallCacheBtn.isEnabled = traces && userIsAdmin
-            for b in self.buttons where ![self.installPlusBtn, self.installCacheBtn, self.reinstallBtn, self.uninstallPlusBtn, self.uninstallCacheBtn].contains(b) { b.isEnabled = true }
+            for b in self.buttons where ![self.installPlusBtn, self.installCacheBtn, self.reinstallBtn, self.uninstallPlusBtn, self.uninstallCacheBtn,
+                                          self.reinstallPlusBtn, self.reinstallCacheBtn].contains(b) { b.isEnabled = true }
             self.uninstallAllBtn.isEnabled = !traces || userIsAdmin
             // the status line, between actions: why a feature can't be installed, then any notice
             var lines: [String] = []
@@ -247,11 +284,41 @@ final class Controller: NSObject {
     func busy(_ msg: String?) {
         onMain {
             self.actionRunning = msg != nil
-            if msg == nil { self.currentAction = nil }
+            // not a short wait (inBackground), unless something changed during it
+            let ended = msg == nil && (self.currentAction != nil || self.changedDuringAction)
+            let quietly = msg == nil && !ended && self.quietDuringAction
+            if msg == nil { self.currentAction = nil; self.changedDuringAction = false; self.quietDuringAction = false }
             setBusyMarker(self.currentAction)
             self.status.stringValue = msg ?? ""
             if msg != nil { self.spinner.startAnimation(nil) } else { self.spinner.stopAnimation(nil) }
             if msg != nil { self.buttons.forEach { $0.isEnabled = false } } else { self.refresh() }
+            if ended { self.prepareChanged() } else if quietly { self.prepareChanged(quiet: true) } else { self.prepareTab?.update() }
+        }
+    }
+
+    /// busy for work that has just started and takes a while: the status line and spinner are on
+    /// the Manage tab, so it comes to the front, from any tab.
+    func busyInFront(_ msg: String) {
+        onMain { self.showTab(.manage) }
+        busy(msg)
+    }
+
+    /// Something the Prepare and Status tabs checked may have changed: an install, an uninstall,
+    /// clearing saved stems, the settings, the location, or coming back to the app. A tab that isn't
+    /// in front checks again when it is.
+    /// `quiet`: coming back to the app or the window, where usually nothing changed: the tab
+    /// showing checks again without clearing what it shows. Anything this app did is shown checked.
+    func prepareChanged(quiet: Bool = false) {
+        onMain {
+            if !quiet { self.prepareTab?.stale = true; self.statusTab?.forget() }
+            // not during an action: a password prompt makes the app inactive and active again, and
+            // its end checks (quietly if only coming back to the app came meanwhile)
+            if self.actionRunning { if quiet { self.quietDuringAction = true } else { self.changedDuringAction = true } }
+            if let t = self.prepareTab, inFront(t), !self.actionRunning {
+                t.reloadList(quiet: quiet && !t.stale)
+                t.stale = false
+            } else { self.prepareTab?.update() }
+            self.statusTab?.reloadIfShowing()
         }
     }
 
@@ -273,9 +340,24 @@ final class Controller: NSObject {
     }
 }
 
-/// Closing the window quits the app: not while an action runs.
+/// Closing the window quits the app: not while an action runs; while a playlist is being
+/// prepared, only once the user agrees to stop it.
 extension Controller: NSWindowDelegate {
-    func windowShouldClose(_ sender: NSWindow) -> Bool { !actionRunning }
+    func windowDidDeminiaturize(_ notification: Notification) { prepareChanged(quiet: true) }   // a tab now in front: nothing else says so
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if actionRunning { return false }
+        return confirmStopPreparing("Quit")
+    }
+
+    /// While a playlist is being prepared: asks to stop it (`verb`: the button, e.g. "Quit"),
+    /// then stops it and waits for its set to be written. True when nothing is being prepared now.
+    func confirmStopPreparing(_ verb: String) -> Bool {
+        guard let p = prepareTab, p.isRunning else { return true }
+        let name = p.runPlaylist?.name ?? ""
+        guard alert("“\(name)” is being prepared", "Stop preparing it? The tracks done so far stay prepared.", ["Stop and \(verb)", "Cancel"]) != "Cancel" else { return false }
+        log("prepare: stopped for \(verb.lowercased())")
+        return p.stopAndWait()
+    }
 }
 
 // MARK: - the status lights

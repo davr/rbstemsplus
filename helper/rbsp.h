@@ -1,0 +1,78 @@
+/* RB Stems Plus's prepare helper: shared declarations. The rules each part follows were measured
+ * against rekordbox 7.2.19; the numbers in comments are from there. */
+#ifndef RBSP_H
+#define RBSP_H
+#include <stddef.h>
+#include <stdint.h>
+
+/* rekordbox's chunking: chunk i starts at i * HOP - PRE, L samples, zero-padded; the track's final
+ * sample is never sent */
+#define CHUNK_L 485100
+#define CHUNK_HOP 483052
+#define CHUNK_PRE 1024
+#define BINS 2048
+#define FRAMES_F 474                    /* the model's spectrogram frames for one chunk */
+
+/* the most decoded versions of one file: AAC's decoder outputs (2 seen) x two lengths of its last
+ * packet (requirement 3, the short last packet) */
+#define MAX_TRACKS 8
+
+/* one decoded version of a file, as rekordbox's separator reads it before chunking, at 44.1 kHz:
+ * planar stereo float32 (s[0..n) left, s[n..2n) right), or the AAC decoder's own 16-bit samples
+ * (p16, interleaved, ch channels: a sample is p16 / 32768), shared by the versions that differ
+ * only in length (owner 0 for those) */
+typedef struct {
+    float *s;
+    int16_t *p16;
+    int ch, owner;
+    size_t n;
+} track;
+
+typedef struct {
+    track t[MAX_TRACKS];
+    int count;
+    char how[200];                      /* how it was decoded, for the log */
+} tracks;
+
+void tracks_free(tracks *ts);
+
+/* decode.c: 0 and ts filled, or 1 and why it is skipped (a sentence, no trailing period) */
+int load_tracks(const char *path, const char *rekordbox_app, tracks *ts, char *why, size_t whyn);
+
+/* decode.c, without decoding: 0 when load_tracks would decode the file (as far as its header
+ * tells), *seconds its length as macOS estimates it (0 when unknown), *aac 1 for AAC (two decoder
+ * outputs, each with its own entries); or 1 and why load_tracks refuses it */
+int probe_track(const char *path, double *seconds, int *aac, char *why, size_t whyn);
+
+/* resample.c: rekordbox's sample-rate converter to 44.1 kHz; 0 when done, *out malloc'd planar */
+int rb_resample(const float *in, size_t n, int rate, float **out, size_t *nout);
+
+/* mp4.c: the sound track's sample table; 0 when found */
+typedef struct {
+    uint32_t timescale;
+    uint64_t stts_total;                /* the sample table's length, in timescale units */
+    uint32_t last_delta;                /* the last packet's length, in timescale units */
+    int has_stts;
+} mp4_audio;
+int mp4_audio_track(const char *path, mp4_audio *out);
+
+/* mp3.c: rekordbox's MP3 reader (frame map, then its own libmpg123): 0 and *out (planar stereo,
+ * float32) or 1 and why */
+int rb_mp3(const char *path, const char *libmpg123, float **out, size_t *n, char *why, size_t whyn);
+
+/* aac.c: every distinct output of Apple's AAC decoder for the file (the 64-byte stack sweep),
+ * int16 interleaved, sorted by content; *rate and *ch as the decoder reports them */
+typedef struct {
+    int16_t *pcm[MAX_TRACKS];
+    size_t frames[MAX_TRACKS];
+    int count;
+    int rate, ch;
+} aac_outputs;
+int aac_decode_all(const char *path, aac_outputs *o, char *why, size_t whyn);
+void aac_outputs_free(aac_outputs *o);
+
+/* chunk i of a track (rekordbox's), planar [2][CHUNK_L] into c */
+void chunk_at(const track *t, size_t i, float *c);
+size_t n_chunks(size_t n);
+
+#endif

@@ -1,7 +1,7 @@
 # RB Stems Plus: troubleshooting
 
 Find the message you saw, or what's going wrong, below. Every step RB Stems Plus takes is also
-written in the log on the right of its window. In the app, **Help › RB Stems Plus
+written in the log on the Manage tab (**Manage › Show Log**). In the app, **Help › RB Stems Plus
 Troubleshooting** opens this page. Nothing here helped?
 [Make a problem report](#making-a-problem-report).
 
@@ -28,6 +28,7 @@ Troubleshooting** opens this page. Nothing here helped?
 
 **Using it**
 - [The first STEMS on a track is slow](#the-first-stems-on-a-track-is-slow)
+- [Demucs v4 or Stems Cache does nothing](#demucs-v4-or-stems-cache-does-nothing)
 - [Reloading a track is still slow](#reloading-a-track-is-still-slow)
 - [Stems Cache's light is yellow](#stems-caches-light-is-yellow)
 - [Saved stems take too much space](#saved-stems-take-too-much-space)
@@ -103,7 +104,7 @@ browser. Move it to the Trash and use the install command, which doesn't trigger
 
 ### The lights, the status line and greyed-out buttons
 
-The two lights at the top are one per feature:
+The two lights on the Status tab are one per feature:
 - **green check:** on
 - **yellow:** Stems Cache is installed but not saving stems right now (see
   [Stems Cache's light is yellow](#stems-caches-light-is-yellow))
@@ -146,8 +147,8 @@ installed."*
     then uninstall again.
   - **Remove** deletes that copy (in `/Library/Application Support/rbstemsplus`). Nothing needs it
     once rekordbox is gone: Pioneer's installer can always reinstall rekordbox whole.
-  - **Cancel** keeps it. **Uninstall RB Stems Plus Completely** then stops with *"Uninstall
-    stopped"*, and nothing else is deleted.
+  - **Cancel** keeps it. **Uninstall RB Stems Plus…** (in the RB Stems Plus menu) then stops
+    with *"Uninstall stopped"*, and nothing else is deleted.
 
 ### Open rekordbox and turn on STEMS once
 
@@ -205,8 +206,8 @@ On a standard (non-administrator) account:
   folder"*)
 - Stems Cache can't be installed: the status line says *"Stems Cache needs an administrator
   account."*
-- Stems Cache can't be removed or reinstalled: its buttons, and **Uninstall RB Stems Plus
-  Completely**, are greyed out, and the status line says *"Removing Stems Cache needs an
+- Stems Cache can't be removed or reinstalled: its buttons, and **Uninstall RB Stems Plus…** in the RB Stems
+  Plus menu, are greyed out, and the status line says *"Removing Stems Cache needs an
   administrator account."* (or *"Reinstalling or removing..."*), even when another account
   installed it
 - **Update RB Stems Plus** says *"Administrator needed"*
@@ -308,7 +309,8 @@ interrupted"*. **Cancel** stops with nothing changed.
 RB Stems Plus starts nothing while rekordbox's updater or Pioneer's installer is running:
 rekordbox is about to change. It also waits while macOS's Installer app or the `installer`
 command installs anything (some company-managed Macs and Homebrew use it). Other apps' own
-updaters don't count.
+updaters don't count. It asks about reinstalling only once they have finished and their window
+is closed.
 
 Wait until it's done, then try again. If it seems stuck, restart the Mac.
 
@@ -337,10 +339,19 @@ load of that track takes about 7 seconds.
 - Only an Apple Silicon Mac has been tested.
 - Too slow for you? Click **Uninstall Demucs v4** to go back to rekordbox's model.
 
+### Demucs v4 or Stems Cache does nothing
+
+Check rekordbox's **Preferences › Extensions › STEMS › STEMS Analysis Process**. It must be
+**Prioritize sound quality**. With **Prioritize speed**, rekordbox separates tracks with a
+different, faster engine that RB Stems Plus doesn't change: the stems come from that engine,
+not Demucs v4, and Stems Cache neither saves nor loads them.
+
 ### Reloading a track is still slow
 
 **Check the lights first.** If Stems Cache's light is yellow or red, see [Stems Cache's light is yellow](#stems-caches-light-is-yellow) or
 [Stems Cache is off after a rekordbox update](#stems-cache-is-off-after-a-rekordbox-update).
+Then check that STEMS Analysis Process is **Prioritize sound quality** (see
+[Demucs v4 or Stems Cache does nothing](#demucs-v4-or-stems-cache-does-nothing)).
 
 Other reasons a track gets separated again:
 - its stems were removed: unused for 60 days, over the size limit, or **Clear Saved Stems**
@@ -388,8 +399,9 @@ saving stems while your disk has less than 25 GB free."*
 When stems are saved on an external drive (see
 [Saved stems on another drive](#saved-stems-on-another-drive)):
 
-- ***"Stems Cache's drive "GLS" isn't connected..."*** Connect it, then open rekordbox. Until
-  then rekordbox separates tracks as usual and nothing is saved. Renamed the drive, or does it
+- ***"Stems Cache's drive "GLS" isn't connected..."*** Connect it. With rekordbox open, Stems Cache
+  uses it again by itself, unless the message says to restart rekordbox; if rekordbox is closed,
+  open it. Until then rekordbox separates tracks as usual and nothing is saved. Renamed the drive, or does it
   show as "GLS 1"? Choose it again in **Settings…**: the stems on it are kept.
 - ***"Stems Cache isn't using "GLS" right now: ..."*** rekordbox opened without the drive, or
   lost it while running (unplugged, asleep, ejected). Connect it: Stems Cache checks the drive
@@ -409,8 +421,13 @@ When stems are saved on an external drive (see
 - ***"Stems Cache needs an update to save stems on "GLS"..."*** The Stems Cache in rekordbox is
   older than this app (for example, another account's older RB Stems Plus reinstalled it after a
   rekordbox update): it saves on this Mac for now. Click **Reinstall Stems Cache**.
+- ***"Stems Cache isn't saving: "GLS" is a network drive."*** Saved stems go only on a drive
+  connected to this Mac: choose one in **Settings…**, or **Use This Mac**.
 - ***"Stems Cache can't read its settings (config.ini)."*** or ***"Where Stems Cache saves stems
   is set wrongly in config.ini."*** See [config.ini can't be read](#configini-cant-be-read).
+- ***"Stems Cache isn't saving stems in this rekordbox session: its settings (config.ini)
+  couldn't be read when rekordbox opened."*** rekordbox reads them only as it opens: restart
+  rekordbox. If it happens again, see [config.ini can't be read](#configini-cant-be-read).
 
 ### Saved stems take too much space
 
@@ -457,6 +474,8 @@ only there. Quit rekordbox first.
 - **Several Macs or accounts** can use the same folder, one at a time. Stems saved by one are
   used by the others (with the same model). Each one's size and day limits clean up the same
   stems, and **Clear Saved Stems** or a complete uninstall on any of them deletes them for all.
+  A prepared playlist is protected only for the account that prepared it: another account or Mac
+  can remove its stems under its own limits.
 - **macOS asks** whether rekordbox and RB Stems Plus may access files on a removable volume: click
   **Allow**. If you clicked Don't Allow: System Settings › Privacy & Security › Files and
   Folders, turn on *Removable Volumes* for rekordbox and for RB Stems Plus.
@@ -521,7 +540,8 @@ Click **Reinstall Now**.
 - It can't ask if RB Stems Plus Watcher is turned off (see
   [Reinstall reminders are off](#reinstall-reminders-are-off)).
 
-Any time, you can open RB Stems Plus and click **Reinstall**.
+Any time, you can open RB Stems Plus and, on the **Manage** tab, click **Install** for the part
+whose light is red.
 
 **Don't want Stems Cache back?** Click **Uninstall Stems Cache** anyway (it stays clickable while
 its light is red): it removes the copies of Pioneer's files it kept for the old rekordbox
@@ -549,8 +569,9 @@ model back"*):
 
 - **Reinstall Now** puts back only what went missing. If Stems Cache is still in place, that's
   just Demucs v4.
-- The **Reinstall** button in the app reinstalls everything you chose: with Stems Cache it also
-  re-signs rekordbox (about a minute).
+- To do it later: open the app and, on the **Manage** tab, click **Install** for the part whose
+  light is red. For Stems
+  Cache that re-signs rekordbox (about a minute).
 
 Reinstalling works offline too, from the files RB Stems Plus already has (for Stems Cache, only
 if they were downloaded in the last 7 days).
@@ -566,9 +587,12 @@ rekordbox update. If it's turned off in System Settings › General › Login It
 nothing asks, and the status line says *"Reinstall reminders are off. Turn on RB Stems Plus
 Watcher in System Settings › General › Login Items & Extensions."*
 
+With it off, your prepared playlists aren't checked when rekordbox opens either, so no notification
+comes: look at the **Status** tab before a set.
+
 Turn on **RB Stems Plus Watcher** there to get the reminders back. RB Stems Plus never turns it
-back on by itself. Without the reminders, open RB Stems Plus after a rekordbox update and click
-**Reinstall** if a light isn't green.
+back on by itself. Without the reminders, open RB Stems Plus after a rekordbox update and, on the
+**Manage** tab, click **Install** for any part whose light is red.
 
 ### Update failed
 
@@ -586,9 +610,9 @@ the reason.
 
 ### New Mac, Migration Assistant or Time Machine
 
-*Not tested yet.* What's safe: open RB Stems Plus. If a light is red, click **Reinstall**. If
-that fails, reinstall rekordbox (see [Reinstall rekordbox](#reinstall-rekordbox)), then click
-**Install**.
+*Not tested yet.* What's safe: open RB Stems Plus. If a light is red, click **Install** for that
+part on the **Manage** tab. If that fails, reinstall rekordbox (see [Reinstall rekordbox](#reinstall-rekordbox)), then
+click **Install** again.
 
 Stems saved on an external drive move with the drive: on the new Mac, choose the drive in
 **Settings…** and they're used. Time Machine doesn't back up stems saved on an APFS or Mac OS
@@ -632,7 +656,7 @@ reinstall Demucs v4 meanwhile, click **Remind Me Later**.
 
 ### Remove RB Stems Plus Anyway
 
-When **Uninstall Demucs v4** (*"Uninstall failed"*) or **Uninstall RB Stems Plus Completely**
+When **Uninstall Demucs v4** (*"Uninstall failed"*) or **Uninstall RB Stems Plus…**
 (*"Uninstall stopped"*) can't put rekordbox's own stems model back, it says why. Nothing is
 deleted. **Open Help** brings you here, or to
 [No saved copy of rekordbox's model](#no-saved-copy-of-rekordboxs-model) when there's no saved
@@ -668,7 +692,7 @@ copy, see [No saved copy of rekordbox's model](#no-saved-copy-of-rekordboxs-mode
 - **rekordbox must be closed in every account** while RB Stems Plus changes things.
 - **"Already working":** RB Stems Plus in another account is changing rekordbox, or a change is
   just finishing. Nothing was changed. Wait a moment, then try again.
-- **Uninstall RB Stems Plus Completely** deletes the app only from the account that installed
+- **Uninstall RB Stems Plus…** deletes the app only from the account that installed
   it. In the other accounts it removes only that account's own files. If Stems Cache is still
   installed for another account when the app is deleted, the last message says so: that account
   needs to paste the install command again to get the app back.
@@ -684,11 +708,11 @@ That doesn't undo anything: rekordbox keeps Demucs v4 and Stems Cache. And you g
 reinstall reminders after rekordbox updates.
 
 **Fix:** paste the install command (see the [README](../README.md#install)), then click
-**Uninstall RB Stems Plus Completely**.
+**Uninstall RB Stems Plus…**.
 
 ### Removing everything without the app
 
-Normally use **Uninstall RB Stems Plus Completely** in the app. If the app is gone and the
+Normally use **Uninstall RB Stems Plus…** in the app. If the app is gone and the
 install command can't bring it back:
 
 1. Quit rekordbox.
@@ -714,13 +738,16 @@ install command can't bring it back:
    rm -f ~/Library/LaunchAgents/io.github.rbstemsplus.watcher.plist
    rm -rf ~/Library/Application\ Support/rbstemsplus ~/Library/Caches/rbstemsplus ~/Library/Logs/rbstemsplus
    sudo rm -rf /Library/Application\ Support/rbstemsplus
+   tccutil reset All io.github.rbstemsplus.app
    rm -rf /Applications/RB\ Stems\ Plus.app /Applications/.RB\ Stems\ Plus.update.app /Applications/.RB\ Stems\ Plus.old.app /Applications/.RB\ Stems\ Plus.new.app /Applications/.RB\ Stems\ Plus.bootstrap-old.app
    ```
 
-6. **The App Management entries (optional):** the complete uninstall removes RB Stems Plus's
-   own. rekordbox's entry (added when you allowed an update) stays, and it's harmless. To remove
-   an entry: System Settings › Privacy & Security › App Management, select it, then click the
-   minus button.
+6. **The permissions (optional):** `tccutil` in step 5 removes RB Stems Plus's App Management and
+   Files and Folders permissions only while the app is still in /Applications. It says "No such
+   bundle identifier" when the app is already gone, and the leftover entries do nothing. To remove
+   one by hand: System Settings › Privacy & Security › App Management (or Files and Folders),
+   select it, then click the minus button. rekordbox's App Management entry (added when you
+   allowed an update) stays, and it's harmless.
 
 ## Help
 

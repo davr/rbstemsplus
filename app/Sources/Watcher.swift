@@ -77,30 +77,52 @@ func watcherRounds(max: Int, check: () -> Bool, release: () -> Void, again: () -
     }
 }
 
+/// Waits until nothing is changing rekordbox and it is closed, then true: while rekordbox's updater
+/// or Pioneer's installer runs, as long as that takes (its window may stay open); while RB Stems
+/// Plus is busy, up to 10 minutes (then false: the app will say what it needs itself); while
+/// rekordbox is open (reinstalling needs it closed, and the user may be playing). In any order and
+/// more than once: rekordbox's updater quits rekordbox after it starts, and rekordbox may reopen
+/// after it. `inSession` runs as rekordbox is found open and at each look at it (a new session's
+/// check is due, once, by its pid). False too with an uninstall left half-done (`halfUninstalled`).
+func watcherSettle(updating: () -> Bool, appBusy: () -> Bool, rekordboxOpen: () -> Bool, pause: (Int) -> Void,
+                   halfUninstalled: () -> String?, inSession: () -> Void, log: (String) -> Void) -> Bool {
+    while true {
+        var waited = 0, busyFor = 0, said = false
+        while true {
+            if updating() {
+                if !said { log("an update is running: waiting until it ends"); said = true }
+                if rekordboxOpen() { inSession() }      // a session under way now won't be there once this ends
+            }
+            else if appBusy() && busyFor < 120 { busyFor += 1 }
+            else { break }
+            pause(5)
+            waited += 1
+        }
+        if waited > 0 { log("waited \(waited * 5) s for an update or RB Stems Plus to finish") }
+        if appBusy() { log("RB Stems Plus is still busy: not asking"); return false }
+        if let id = halfUninstalled() { log("an uninstall didn't finish (\(id)): not asking"); return false }
+        guard rekordboxOpen() else { return true }
+        inSession()
+        log("rekordbox is open: waiting until it quits")
+        while rekordboxOpen() { pause(10); inSession() }
+        pause(3)
+    }
+}
+
 /// One check (runWatcher), for the valid app `app`. `putOff`: what the user answered Remind Me
 /// Later to in this process, not asked again until the next start. Returns false when the
 /// watcher should stop (busy, an uninstall left half-done, the app opened to reinstall).
 func watcherCheck(app: String, putOff: inout Set<String>, log: (String) -> Void) -> Bool {
-    // wait while an update, an install or RB Stems Plus itself is changing things (up to 10 min)
-    func updating() -> Bool {
-        pioneerUpdating() || appBusy()
-    }
-    var waited = 0
-    while waited < 120 && updating() { sleep(5); waited += 1 }
-    if waited > 0 { log("waited \(waited * 5) s for an update or RB Stems Plus to finish") }
-    // still busy after 10 minutes: the app will say what it needs itself
-    if appBusy() { log("RB Stems Plus is still busy: not asking"); return false }
-    // an uninstall that was stopped (the app quit half-way): the next launch offers to finish
-    // it, never to reinstall what it was removing
-    if let a = markedAction(), a.id.hasPrefix("uninstall") {
-        log("an uninstall didn't finish (\(a.id)): not asking"); return false
-    }
-    // never prompt while rekordbox is open: reinstalling needs it closed, and the user may be playing
-    if rekordboxOpen() {
-        log("rekordbox is open: waiting until it quits")
-        while rekordboxOpen() { sleep(10); utimes(watcherLock, nil) }
-        sleep(3)
-    }
+    let settled = watcherSettle(updating: { pioneerUpdating() }, appBusy: { appBusy() }, rekordboxOpen: { rekordboxOpen() },
+                                pause: { sleep(UInt32($0)); utimes(watcherLock, nil) },
+                                halfUninstalled: {
+                                    // stopped with the app quit half-way: the next launch offers to finish it, never
+                                    // to reinstall what it was removing
+                                    guard let a = markedAction(), a.id.hasPrefix("uninstall") else { return nil }
+                                    return a.id
+                                },
+                                inSession: { checkKeptSets(app: app, log: log) }, log: log)
+    guard settled else { return false }
     // what this check sees starts here: a start before now is covered by it, one after it
     // leaves the again-mark anew
     safeRemove(watcherAgainFile)
@@ -132,6 +154,64 @@ func watcherCheck(app: String, putOff: inout Set<String>, log: (String) -> Void)
         putOff.formUnion(keys)
     }
     return true
+}
+
+/// The marker of the rekordbox session whose prepared playlists were checked (its pid).
+let keptCheckedFile = support + "/kept.checked"
+private var keptCheckedPid = ""     // also when the file can't be written
+/// What the last notifications covered: each set's tracks that weren't ready (JSON).
+let keptNoticedFile = support + "/kept.noticed"
+
+/// As rekordbox opens: whether each prepared playlist is still ready (the helper's --quick
+/// estimate: nothing is read where macOS would ask first). One that isn't gets a notification,
+/// never a dialog over rekordbox. Once per rekordbox session; silent when nothing is prepared or
+/// preparing can't work now (the app says why).
+func checkKeptSets(app: String, log: (String) -> Void) {
+    let pid = runTool("/usr/bin/pgrep", ["-f", "rekordbox\\.app/Contents/MacOS/rekordbox( |$)"]).1.split(separator: "\n").first.map(String.init) ?? ""
+    let last = (try? String(contentsOfFile: keptCheckedFile, encoding: .utf8)) ?? ""
+    guard !pid.isEmpty, last != pid, keptCheckedPid != pid else { return }
+    // this session is seen even with nothing prepared: a set made during it is the user's own doing
+    keptCheckedPid = pid
+    try? pid.write(toFile: keptCheckedFile, atomically: true, encoding: .utf8)
+    let sets = keptSets()
+    guard !sets.isEmpty else { return }
+    let f = prepareFacts(app: app, measured: false)
+    let problems = prepareProblems(f)
+    guard problems.isEmpty else { log("prepared playlists not checked: \(problems.joined(separator: " "))"); return }
+    let names = parsePlaylists(runPrepareHelper(["--playlists"], app: app, timeout: 30).out)
+    let noticed = (try? Data(contentsOf: URL(fileURLWithPath: keptNoticedFile))).flatMap { try? JSONDecoder().decode([String: [String]].self, from: $0) } ?? [:]
+    var noticing: [String: [String]] = [:]
+    defer { if let d = try? JSONEncoder().encode(noticing) { try? d.write(to: URL(fileURLWithPath: keptNoticedFile), options: .atomic) } }
+    for s in sets {
+        noticing[s.name] = noticed[s.name]
+        // being prepared now: the tracks it hasn't reached aren't news
+        if runTool("/usr/bin/pgrep", ["-f", setRunPattern(s.name)]).0 == 0 { log("prepared playlist \(s.name): being prepared, not checked"); continue }
+        let r = checkSet(s.name, prepareBaseArgs(f) + ["--quick", "--keep", s.name]) { runPrepareHelper($0, app: app, timeout: 60) }
+        let name = names.first { $0.id == s.name }?.name ?? "Playlist \(s.name)"
+        guard let e = parseEstimate(r.out) else { log("prepared playlist \(s.name): couldn't be checked (\(noPaths(r.err)))"); continue }
+        let state = setState(e)
+        log("prepared playlist \(s.name): \(state)")
+        let now = notReadyTracks(e)
+        noticing[s.name] = now.isEmpty ? nil : now
+        if newlyNotReady(now, noticed: noticed[s.name] ?? []), let body = keptSetNotice(e) { notify(title: "“\(name)” isn't fully prepared", body: body) }
+    }
+}
+
+/// A regular expression (pgrep -f) for the helper preparing set `name` (runArgs: a check has no --until).
+func setRunPattern(_ name: String) -> String { "rbsp-prepare .*--until [^ ]+ --keep \(name)( |$)" }
+
+/// A check's tracks that aren't ready ("unchecked" ones weren't looked at).
+func notReadyTracks(_ e: Estimate) -> [String] { e.tracks.filter { $0.result == "prepare" || $0.result == "skipped" }.map { $0.file } }
+
+/// Whether a notification tells something new: a track not ready that the last one didn't cover.
+/// One that Prepare can't clear (First N's other tracks, a file that can't be decoded) comes once.
+func newlyNotReady(_ now: [String], noticed: [String]) -> Bool { !Set(now).isSubset(of: noticed) }
+
+/// What the notification says about a prepared playlist that isn't ready, or nil when it is.
+func keptSetNotice(_ e: Estimate) -> String? {
+    let n = e.prepare + e.skipped
+    guard n > 0 else { return nil }
+    return "\(n) \(n == 1 ? "track isn't" : "tracks aren't") fully prepared: rekordbox may separate \(n == 1 ? "it" : "them") as you play. Open RB Stems Plus to see why and prepare it again."
 }
 
 /// The identity of the code at `bundle` (the watcher helper): its code directory hash (cdhash),

@@ -23,7 +23,15 @@
 	<key>LSMinimumSystemVersion</key>
 	<string>12.0</string>
 	<key>NSDesktopFolderUsageDescription</key>
-	<string>RB Stems Plus saves the problem report you create on your Desktop.</string>
+	<string>RB Stems Plus reads the music of the playlists you prepare, and saves the problem report you create on your Desktop.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>RB Stems Plus reads the music of the playlists you prepare.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>RB Stems Plus reads the music of the playlists you prepare.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>RB Stems Plus reads the music of the playlists you prepare.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>RB Stems Plus reads the music of the playlists you prepare.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Gabe-LS</string>
 	<key>NSHighResolutionCapable</key>

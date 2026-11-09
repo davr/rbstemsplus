@@ -1,7 +1,7 @@
 /* Fuzz targets for what the bridge reads from files anyone who can write a drive may control:
- * config.ini (parse_config), a chosen location's marker (marker_ok), an entry's .desc
- * (parse_desc, with and without a chosen location's caps) and an entry's FLAC (decode_flac,
- * from memory and through checked_open from a file).
+ * config.ini (parse_config), a chosen location's marker (marker_ok), a kept set (parse_kept), an
+ * entry's .desc (parse_desc, with and without a chosen location's caps) and an entry's FLAC
+ * (decode_flac, from memory and through checked_open from a file).
  *
  * Built by bridge/build.sh --fuzz with AddressSanitizer and UndefinedBehaviorSanitizer, with the
  * bridge's own source included (its static functions are the targets). Apple's clang has no
@@ -38,6 +38,26 @@ static void t_config(const uint8_t *d, size_t n) {
 
 static void t_marker(const uint8_t *d, size_t n) {
     if (marker_ok((const char *)d, n, FUZZ_ID) && !memmem(d, n, "format=" FORMAT, strlen("format=" FORMAT))) die("marker: accepted without its format");
+}
+
+/* a kept set's file: what counts and what fills agree, and an accepted file is exactly its lines */
+static void t_kept(const uint8_t *d, size_t n) {
+    long long until = -1, until2 = -1;
+    size_t c = 0, c2 = 0;
+    if (parse_kept((const char *)d, n, &until, NULL, &c)) return;
+    kept_entry *v = malloc((c ? c : 1) * sizeof *v);
+    if (parse_kept((const char *)d, n, &until2, v, &c2) || c2 != c || until2 != until) die("kept: counting and filling differ");
+    if (until < 0 || until >= 1000000000000LL) die("kept: a date out of range");
+    char line[KEPT_LINE + 1];
+    size_t head = n - c * KEPT_LINE;
+    for (size_t i = 0; i < c; i++) {
+        char m[65], k[65];
+        hex(v[i].model, 32, m);
+        hex(v[i].key, 32, k);
+        snprintf(line, sizeof line, "%s %s\n", m, k);
+        if (memcmp(d + head + i * KEPT_LINE, line, KEPT_LINE)) die("kept: an entry that isn't its line");
+    }
+    free(v);
 }
 
 static void t_desc(const uint8_t *d, size_t n, int as_chosen) {
@@ -85,12 +105,13 @@ static void t_flac(const uint8_t *d, size_t n, int from_file) {
 
 int LLVMFuzzerTestOneInput(const uint8_t *d, size_t n) {
     if (!n) return 0;
-    switch (d[0] % 6) {
+    switch (d[0] % 7) {
     case 0: t_config(d + 1, n - 1); break;
     case 1: t_marker(d + 1, n - 1); break;
     case 2: t_desc(d + 1, n - 1, 0); break;
     case 3: t_desc(d + 1, n - 1, 1); break;
     case 4: t_flac(d + 1, n - 1, 0); break;
+    case 5: t_kept(d + 1, n - 1); break;
     default: t_flac(d + 1, n - 1, 1); break;
     }
     return 0;
@@ -135,6 +156,7 @@ static void run(const char *name, void (*f)(const uint8_t *, size_t, int), int a
 
 static void w_config(const uint8_t *d, size_t n, int a) { (void)a; t_config(d, n); }
 static void w_marker(const uint8_t *d, size_t n, int a) { (void)a; t_marker(d, n); }
+static void w_kept(const uint8_t *d, size_t n, int a) { (void)a; t_kept(d, n); }
 
 int main(int argc, char **argv) {
     long iters = argc > 1 ? atol(argv[1]) : 20000;
@@ -166,6 +188,13 @@ int main(int argc, char **argv) {
     run("config (long section)", w_config, 0, (const uint8_t *)longs[3], strlen(longs[3]), iters / 4);
     const char *mk = "id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\nformat=rbstems-v1\n";
     run("marker", w_marker, 0, (const uint8_t *)mk, strlen(mk), iters);
+    const char *ks = "rbstemsplus-kept 1\nuntil 1763164800\n"
+                     "435c987855f7ea74ff5f20090541748cbbce5a2e8e501d07b10f4e703453215a ab11111111111111111111111111111111111111111111111111111111111111\n"
+                     "435c987855f7ea74ff5f20090541748cbbce5a2e8e501d07b10f4e703453215a cd22222222222222222222222222222222222222222222222222222222222222\n";
+    long long ku;
+    size_t kc;
+    if (parse_kept(ks, strlen(ks), &ku, NULL, &kc) || ku != 1763164800 || kc != 2) die("kept: the seed isn't read");
+    run("kept", w_kept, 0, (const uint8_t *)ks, strlen(ks), iters);
 
     /* a valid RBD2 .desc of 20 frames */
     int frames = 20;

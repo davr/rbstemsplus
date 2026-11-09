@@ -22,9 +22,12 @@
 # Steps: swiftc per architecture (-O, macOS 12 target) → lipo → the bundle from app/Info.plist
 # with the version from ./VERSION → the icon (app/icon/RBStemsPlus.icon) compiled with actool
 # into Assets.car (macOS 26) and RBStemsPlus.icns (macOS 12–15) → the watcher helper,
-# Contents/Helpers/RB Stems Plus Watcher.app (make_helper) → ad-hoc signatures with the hardened
-# runtime, the helper first, then the app (sign_app; the bootstrap and the update sign again on
-# the user's Mac, the same way) → zip. Needs Xcode (actool reads Icon Composer documents from
+# Contents/Helpers/RB Stems Plus Watcher.app (make_helper) → the prepare helper,
+# Contents/Helpers/rbsp-prepare (helper/build.sh: Apple silicon only, signed ad hoc WITHOUT the
+# hardened runtime, as it loads Pioneer's ONNX Runtime and rekordbox's libmpg123; signed once,
+# here: the outer signatures seal it) → ad-hoc signatures with the hardened runtime, the watcher
+# first, then the app (sign_app; the bootstrap and the update sign these two again on the user's
+# Mac, the same way) → zip. Needs Xcode (actool reads Icon Composer documents from
 # Xcode 26 on). Intermediate files go to build/app/.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -147,6 +150,11 @@ echo "Adding the watcher helper..."
 make_helper "$app"
 helper="$app/Contents/Helpers/RB Stems Plus Watcher.app"
 
+echo "Building the prepare helper..."
+"$root/helper/build.sh" "$build/helper" || die "the prepare helper didn't build (see above)"
+prep="$app/Contents/Helpers/rbsp-prepare"
+cp "$build/helper/rbsp-prepare" "$prep"
+
 # the hardened runtime: no DYLD_INSERT_LIBRARIES or other injected code in the app that asks
 # for the password (it needs no entitlement: it only runs programs, reads files and uses AppKit)
 echo "Signing (ad hoc, hardened runtime, the helper first)..."
@@ -159,6 +167,11 @@ for code in "$helper" "$app"; do
 done
 grep -qx 'Identifier=io.github.rbstemsplus.watcher' <<< "$(codesign -dv "$helper" 2>&1)" \
   || die "the watcher helper isn't signed as io.github.rbstemsplus.watcher"
+signed="$(codesign -dv "$prep" 2>&1)"
+grep -qx 'Identifier=io.github.rbstemsplus.prepare' <<< "$signed" || die "the prepare helper isn't signed as io.github.rbstemsplus.prepare"
+! grep -Eq '^CodeDirectory .*flags=0x[0-9a-f]+\([^)]*runtime' <<< "$signed" \
+  || die "the prepare helper has the hardened runtime: library validation would refuse Pioneer's ONNX Runtime"
+[ "$(lipo -archs "$prep")" = arm64 ] || die "the prepare helper isn't arm64"
 
 # no links or special files in the app (the bootstrap and the update refuse them)
 odd="$(find "$app" ! -type f ! -type d -print -quit)"
@@ -166,4 +179,4 @@ odd="$(find "$app" ! -type f ! -type d -print -quit)"
 
 rm -f "$dist/rbstemsplus-app.zip"
 ditto -c -k --keepParent "$app" "$dist/rbstemsplus-app.zip"
-echo "Built $dist/rbstemsplus-app.zip ($(lipo -archs "$app/Contents/MacOS/$exe"), with $(basename "$helper"), version $version, keys: ${keys[*]%%:*}${test_base:+, TEST BUILD})"
+echo "Built $dist/rbstemsplus-app.zip ($(lipo -archs "$app/Contents/MacOS/$exe"), with $(basename "$helper") and rbsp-prepare, version $version, keys: ${keys[*]%%:*}${test_base:+, TEST BUILD})"

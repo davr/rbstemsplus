@@ -150,6 +150,7 @@ extension Controller {
             return
         }
         writeLocationHint(hintFor(dir: dir, mount: mount, old: readLocationHint(), newID: created ? id : nil))
+        prepareChanged()
         log("settings: stems are saved in \(redact(dir)) from rekordbox's next start\(created ? " (a new folder)" : "")")
         if deleteThisMac {
             // an older Stems Cache reinstalled meanwhile (from another account) still saves on this
@@ -180,6 +181,7 @@ extension Controller {
         }
         safeRemove(pendingDeletionFile)
         log("settings: stems are saved on this Mac from rekordbox's next start")
+        prepareChanged()
         LocationMonitor.shared.invalidateSize()
         LocationMonitor.shared.update(size: true)
         refresh()
@@ -189,11 +191,12 @@ extension Controller {
     /// verified descriptors; the folder and its marker stay (the bridge never creates them). In
     /// the background, the window showing how far it is. Main thread.
     func clearLocation(_ gate: LocationGate, drive: String) {
-        busy("Clearing saved stems on \"\(drive)\"…")
+        busyInFront("Clearing saved stems on \"\(drive)\"…")
         work.async {
             let r = removeInLocation(gate, wholeFolder: false) { n in self.setStatus("Clearing saved stems on \"\(drive)\"… \(n) files") }
             self.log("saved stems on \(redact(gate.dir)) cleared: \(r.ok ? "ok" : "FAILED (\(r.why ?? "?"))")")
             self.busy(nil)
+            self.prepareChanged()
             LocationMonitor.shared.invalidateSize()
             LocationMonitor.shared.update(size: true)
             if !r.ok { _ = self.alert("Saved stems not cleared", "Some saved stems on \"\(drive)\" couldn't be deleted (\(r.why ?? "?")).", ["OK"]) }

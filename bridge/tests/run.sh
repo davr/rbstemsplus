@@ -325,6 +325,86 @@ cache() {
   expect 'has "removed 1 unused for 30 days" && [ "$(find "$c" -name "*.flac" | wc -l | tr -d " ")" = 2 ]' "max_days: an old entry is removed"
 }
 
+# Kept sets (Application Support/rbstemsplus/kept/<name>.kept, the prepare helper's): their entries
+# never age out, and over max_gb every other entry goes first. A file that isn't exactly a kept
+# set, a link, a set whose date has passed, or over 5 sets keep nothing.
+kept() {
+  if [ -z "$have_model" ]; then skip "kept sets (need Pioneer's library and python3)"; return; fi
+  point "$real"
+  local m="$scratch/model/hdemucs.onnx" M c kd old now i gone
+  M="$(printf 'e%.0s' {1..64})" old="$(date -v-40d +%Y%m%d%H%M)" now="$(date +%s)"
+  key() { printf '%064x' "$1"; }
+  flac() { local k; k="$(key "$1")"; echo "$c/$M/${k:0:2}/$k.flac"; }
+  mk() { mkdir -p "$(dirname "$(flac "$1")")"; dd if=/dev/zero of="$(flac "$1")" bs=1m count="$2" 2> /dev/null; touch -t "$3" "$(flac "$1")"; }
+  set_() { local f="$kd/$1" u="$2"; shift 2; mkdir -p "$kd"; { printf 'rbstemsplus-kept 1\nuntil %s\n' "$u"; for i in "$@"; do printf '%s %s\n' "$M" "$(key "$i")"; done; } > "$f"; }
+  start() { fresh "kept-$1"; c="$h/Library/Caches/rbstemsplus" kd="$h/Library/Application Support/rbstemsplus/kept"; config "$2"; }
+  gone() { gone=(); for i in "$@"; do [ -f "$(flac "$i")" ] || gone+=("$i"); done; echo "${gone[*]:-}"; }
+
+  start age 'max_days=30\n'
+  mk 1 1 "$old"; mk 2 1 "$old"; set_ set.kept $((now + 86400)) 1
+  outcome "$m" wait > /dev/null
+  expect '[ "$(gone 1 2)" = 2 ] && has "removed 1 unused for 30 days" && has "kept: 1 sets, 1 of their entries in the cache (0.00 GB)"' \
+    "kept: a kept entry doesn't age out, the other one does: gone $(gone 1 2)"
+
+  start expired 'max_days=30\n'
+  mk 1 1 "$old"; set_ set.kept $((now - 60)) 1
+  outcome "$m" wait > /dev/null
+  expect '[ "$(gone 1)" = 1 ] && ! has "kept:"' "kept: a set whose date has passed keeps nothing, silently"
+
+  # 0.1 GB: 107 MB, emptied down to 96.6 MB
+  start order 'max_gb=0.1\n'
+  for i in 1 2 3 4 5 6; do mk $i 10 "$(date -v-2d -v+${i}M +%Y%m%d%H%M)"; done
+  for i in 7 8 9 10 11 12; do mk $i 10 "$(date -v-1d -v+${i}M +%Y%m%d%H%M)"; done
+  set_ set.kept $((now + 86400)) 1 2 3 4 5 6
+  outcome "$m" wait > /dev/null
+  expect '[ "$(gone {1..12})" = "7 8 9" ] && has ", 3 over 0.1 GB" && has "kept: 1 sets, 6 of their entries in the cache"' \
+    "kept: over the limit, the other entries go first, least recently used first: gone $(gone {1..12})"
+
+  start over 'max_gb=0.1\n'
+  for i in {1..12}; do mk $i 10 "$(date -v-1d -v+${i}M +%Y%m%d%H%M)"; done
+  set_ set.kept $((now + 86400)) {1..12}
+  outcome "$m" wait > /dev/null
+  expect '[ "$(gone {1..12})" = "1 2 3" ] && has "kept: 3 kept entries removed: the cache was over 0.1 GB with every other entry gone"' \
+    "kept: kept entries alone over the limit go too, least recently used first: gone $(gone {1..12})"
+
+  start five 'max_days=30\n'
+  mk 1 1 "$old"; for i in 1 2 3 4 5; do set_ s$i.kept $((now + 86400)) 1; done
+  outcome "$m" wait > /dev/null
+  expect '[ "$(gone 1)" = "" ] && has "kept: 5 sets, 1 of their entries"' "kept: 5 sets (one entry in all of them) keep it"
+
+  start six 'max_days=30\n'
+  mk 1 1 "$old"; for i in 1 2 3 4 5 6; do set_ s$i.kept $((now + 86400)) 1; done
+  outcome "$m" wait > /dev/null
+  expect '[ "$(gone 1)" = 1 ] && has "kept: 6 sets, over 5: nothing is kept"' "kept: over 5 sets keep nothing"
+
+  start bad 'max_days=30\n'
+  mk 1 1 "$old"; set_ set.kept $((now + 86400)) 1; printf 'x' >> "$kd/set.kept"
+  outcome "$m" wait > /dev/null
+  expect '[ "$(gone 1)" = 1 ] && has "kept: set.kept ignored: not a kept set"' "kept: a file with one byte more keeps nothing"
+
+  start upper 'max_days=30\n'
+  mk 1 1 "$old"; set_ set.kept $((now + 86400)) 1; sed -i '' 's/^e/E/' "$kd/set.kept"
+  outcome "$m" wait > /dev/null
+  expect '[ "$(gone 1)" = 1 ] && has "kept: set.kept ignored: not a kept set"' "kept: capitals in a line keep nothing"
+
+  start link 'max_days=30\n'
+  mk 1 1 "$old"; set_ real.txt $((now + 86400)) 1; ln -s real.txt "$kd/set.kept"
+  outcome "$m" wait > /dev/null
+  expect '[ "$(gone 1)" = 1 ] && has "kept: set.kept ignored: not a plain file"' "kept: a link keeps nothing"
+
+  start hidden 'max_days=30\n'
+  mk 1 1 "$old"; set_ .set.kept $((now + 86400)) 1
+  outcome "$m" wait > /dev/null
+  expect '[ "$(gone 1)" = 1 ] && ! has "kept:"' "kept: a name starting with a dot (a temporary file) isn't read"
+
+  start dirlink 'max_days=30\n'
+  mk 1 1 "$old"; kd="$scratch/kept-elsewhere-$arch"; rm -rf "$kd"; set_ set.kept $((now + 86400)) 1
+  ln -s "$kd" "$h/Library/Application Support/rbstemsplus/kept"
+  outcome "$m" wait > /dev/null
+  expect '[ "$(gone 1)" = 1 ] && has "kept: the folder can'"'"'t be read"' "kept: a kept folder that is a link keeps nothing"
+  expect '! has ERROR' "kept: no ERROR in the log"
+}
+
 # The cleanup removes only what the bridge writes: <model>/<key[0:2]>/<key>.flac|.desc, their
 # .<pid>.tmp, model-<inode>.sha256.<pid>.tmp. Everything else, however close, stays; so does
 # anything behind a symlink.
@@ -514,16 +594,16 @@ rebuilt() {
   sha="$(shasum -a 256 "$scratch/model/hdemucs.onnx" | cut -d' ' -f1)"
   expect '[ "$out" = "a model stored 1 a cache " ] && [ -d "$h/Library/Caches/rbstemsplus/$sha" ]' "rekordbox_model=1: a model with x zero is cached as before, in its own folder: got \"$out\""
 
-  expect 'grep -aq "rbstems-cache: rebuild=1 location=1 pioneer=435c987855f7ea74ff5f20090541748cbbce5a2e8e501d07b10f4e703453215a;" "$bridge"' \
-    "the bridge says what it can cache (location=1 before pioneer=), for the app"
+  expect 'grep -aq "rbstems-cache: rebuild=1 location=1 kept=1 pioneer=435c987855f7ea74ff5f20090541748cbbce5a2e8e501d07b10f4e703453215a;" "$bridge"' \
+    "the bridge says what it can cache (location=1 kept=1 before pioneer=), for the app"
 }
 
 . "$here/location.sh"
 
 # ONLY="location losses" runs just those (one case at a time while debugging); SANITIZE=1 runs
 # the storage tests, arm64 only, with the bridge and the harness built with ASan and UBSan
-tests="loading configs fixtures logs homes cache nearoff foreign space memory rebuilt location entries losses faults companions images midway"
-if [ "${SANITIZE:-}" = 1 ]; then tests="configs fixtures cache nearoff foreign location entries losses faults companions images midway"; archs=(arm64); fi
+tests="loading configs fixtures logs homes cache nearoff kept foreign space memory rebuilt location entries losses faults companions images midway"
+if [ "${SANITIZE:-}" = 1 ]; then tests="configs fixtures cache nearoff kept foreign location entries losses faults companions images midway"; archs=(arm64); fi
 tests="${ONLY:-$tests}"
 case " $tests " in *" images "*|*" midway "*) attach_images ;; esac
 for arch in "${archs[@]}"; do

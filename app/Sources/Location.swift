@@ -410,7 +410,9 @@ func locationLight(_ s: LocationStatus, bridge: BridgeState?, rekordboxRunning: 
         switch p {
         case .available: return nil
         case .notConnected:
-            return "Stems Cache's drive \(d) isn't connected: rekordbox separates tracks as usual. Connect it, then \(verb) rekordbox. Renamed the drive, or does it show as \"\(driveName(dir, mounts: mounts)) 1\"? Choose it again in Settings: the stems on it are kept."
+            // the running bridge hasn't noticed yet (it looks at the drive when it needs it): no restart either
+            let connect = bridge?.state == "available" ? "Connect it: Stems Cache uses it again by itself." : "Connect it, then \(verb) rekordbox."
+            return "Stems Cache's drive \(d) isn't connected: rekordbox separates tracks as usual. \(connect) Renamed the drive, or does it show as \"\(driveName(dir, mounts: mounts)) 1\"? Choose it again in Settings: the stems on it are kept."
         case .folderMissing, .markerMissingOrWrong: return "Stems Cache's folder on \(d) is missing or was replaced."
         case .link: return "Stems Cache isn't saving: a folder on the way to Stems Cache's folder on \(d) is a link."
         case .network: return "Stems Cache isn't saving: \(d) is a network drive. Choose a drive connected to this Mac in Settings."
