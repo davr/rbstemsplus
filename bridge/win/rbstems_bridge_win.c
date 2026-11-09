@@ -2468,6 +2468,9 @@ static int add_dml(OrtSessionOptions *o, const char **what) {
     return 0;
 }
 
+/* a status whose failure doesn't matter (a best-effort option): freed */
+static void ignore_status(OrtStatus *st) { if (st) R->ReleaseStatus(st); }
+
 /* How many CPU threads our model's CPU sessions get. rekordbox's own options leave Demucs v4 at
  * 0.88x real time; the same model measured with rbsp-bench: 4 threads 2.5x, 12 threads 3.4x (an
  * 8 GB RTX 4060 laptop, 2026-11-09). All logical processors, at most 12. */
@@ -2809,7 +2812,7 @@ static OrtStatus *ORT_API_CALL hook_CreateSession(const OrtEnv *env, const ORTCH
     if (st || (!cached && !on_gpu && !cuda_ok)) return st;
     /* a GPU session is watched: what a CPU twin is made from (rekordbox's options, as they were) is kept */
     OrtSessionOptions *copts = NULL;
-    if (on_gpu && options && !R->CloneSessionOptions(options, &copts) && is_ours(fp)) { R->DisableMemPattern(copts); R->SetIntraOpNumThreads(copts, cpu_threads()); }
+    if (on_gpu && options && !R->CloneSessionOptions(options, &copts) && is_ours(fp)) { ignore_status(R->DisableMemPattern(copts)); ignore_status(R->SetIntraOpNumThreads(copts, cpu_threads())); }
     wchar_t *wpath = on_gpu ? wcsdup(model_path) : NULL;
     int stored = 0;
     rb_lock(&lock);
@@ -3070,7 +3073,7 @@ static void watch_fire(void *ctx) {
     rb_lock(&lock);
     int stop = !w->done;
     rb_unlock(&lock);
-    if (stop) w->api->RunOptionsSetTerminate(w->ro);
+    if (stop) ignore_status(w->api->RunOptionsSetTerminate(w->ro));
     watch_unref(w);
 }
 
