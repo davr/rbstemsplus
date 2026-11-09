@@ -122,7 +122,7 @@ public static class Rekordbox
         return s != null && (s == Consts.OurModelSize || s == m?.Model.Size);
     }
 
-    /// The capability line the bridge carries ("rbstems-cache: rebuild=1 location=1 pioneer=<sha>;").
+    /// The capability line the bridge carries ("rbstems-cache: rebuild=1 location=1 kept=1 pioneer=<sha>;").
     static string? CapsLine(byte[] d)
     {
         if (!IsBridge(d)) return null;
@@ -144,6 +144,10 @@ public static class Rekordbox
 
     public static bool BridgeSaysLocation(byte[] d) =>
         CapsLine(d) is { } line && line.Split("pioneer=")[0].Split(' ').Contains("location=1");
+
+    /// Whether the bridge keeps prepared playlists' entries (kept sets, upstream 1.3.0): "kept=1" in its capabilities.
+    public static bool BridgeSaysKept(byte[] d) =>
+        CapsLine(d) is { } line && line.Split("pioneer=")[0].Split(' ').Contains("kept=1");
 
     public static int IndexOf(byte[] hay, byte[] needle, int from = 0)
     {

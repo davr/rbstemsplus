@@ -16,6 +16,8 @@ sealed class Watcher : ApplicationContext
     readonly EventWaitHandle quit = new(false, EventResetMode.ManualReset, WatcherRegistration.QuitEvent);
     DateTime dirtySince = DateTime.MinValue;
     bool asking;
+    int busySeconds;                                      // how long the app has been busy, in a row
+    string? lastWhy;                                      // what the log last said about waiting
     readonly HashSet<string> remindLater = new();
 
     public Watcher(AppPaths p)
@@ -54,8 +56,15 @@ sealed class Watcher : ApplicationContext
     {
         if (asking || dirtySince == DateTime.MinValue) return;
         if (DateTime.UtcNow - dirtySince < TimeSpan.FromSeconds(20)) return;          // let the change finish
-        if (Rekordbox.PioneerUpdating() || Rekordbox.Running() || State.AppBusy(p)) return;
+        bool busy = State.AppBusy(p);
+        if (busy) busySeconds += (int)(timer.Interval / 1000); else busySeconds = 0;
+        var d = WatcherLogic.Decide(Rekordbox.PioneerUpdating(), busy, Rekordbox.Running(), busySeconds,
+                                    () => State.Leftover(p) is { } a && a.Id.StartsWith("uninstall") ? a.Id : null, out var why);
+        if (why != null && why != lastWhy) { log.Write("watcher: " + why); lastWhy = why; }
+        if (d == Settle.Wait) return;
+        lastWhy = null;
         dirtySince = DateTime.MinValue;
+        if (d == Settle.Skip) return;
         var rb = Rekordbox.Current();
         var m = Payload.Saved(new PayloadFiles(p));
         var keys = State.MissingKeys(p, rb, m).Where(k => !remindLater.Contains(k)).ToList();

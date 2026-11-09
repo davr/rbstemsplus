@@ -14,7 +14,7 @@ public sealed class MainForm : Form, IAsk
     readonly Light modelLight = new() { Text = "Demucs v4" }, cacheLight = new() { Text = "Stems Cache" };
     readonly Button installModel = Btn("Install Demucs v4"), installCache = Btn("Install Stems Cache"), reinstall = Btn("Reinstall"),
                     uninstallModel = Btn("Uninstall Demucs v4"), uninstallCache = Btn("Uninstall Stems Cache"), uninstallAll = Btn("Uninstall RB Stems Plus Completely"),
-                    updateCache = Btn("Update Stems Cache");
+                    updateCache = Btn("Update Stems Cache"), reinstallModel = Btn("Reinstall Demucs v4"), reinstallCache = Btn("Reinstall Stems Cache");
     readonly Label statusLine = new() { AutoSize = false, Height = 64, Dock = DockStyle.Bottom, ForeColor = SystemColors.GrayText };
     readonly Label stepLine = new() { AutoSize = false, Height = 36, Dock = DockStyle.Bottom, Font = new Font(SystemFonts.MessageBoxFont ?? SystemFonts.DefaultFont, FontStyle.Bold), Visible = false };
     readonly ProgressBar progressBar = new() { Dock = DockStyle.Bottom, Height = 18, Visible = false, Minimum = 0, Maximum = 100, MarqueeAnimationSpeed = 30 };
@@ -59,7 +59,7 @@ public sealed class MainForm : Form, IAsk
         var lights = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(12, 10, 12, 0) };
         lights.Controls.AddRange(new Control[] { modelLight, cacheLight });
         var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, Dock = DockStyle.Fill, Padding = new Padding(12, 8, 8, 0), WrapContents = false };
-        buttons.Controls.AddRange(new Control[] { installModel, installCache, updateCache, reinstall, uninstallModel, uninstallCache, uninstallAll });
+        buttons.Controls.AddRange(new Control[] { installModel, installCache, updateCache, reinstall, reinstallModel, reinstallCache, uninstallModel, uninstallCache, uninstallAll });
         var left = new Panel { Dock = DockStyle.Left, Width = 280 };
         left.Controls.Add(buttons);
         left.Controls.Add(stepLine);
@@ -80,6 +80,11 @@ public sealed class MainForm : Form, IAsk
         installCache.Click += (_, _) => Run("install-cache", "Install Stems Cache", () =>
             Confirm("Install Stems Cache?", "Saves the stems rekordbox separates, with either stems model, so they load much faster the next time.\n\nIt replaces one file in rekordbox's folder (Pioneer's is kept), so Windows asks for an administrator's permission.", "Install") && engine.InstallCache());
         reinstall.Click += (_, _) => Run("reinstall", "Reinstall", engine.ReinstallMissing);
+        // each feature's own Reinstall (upstream 1.3.0's Manage tab): that feature only, its files fetched and put in again
+        reinstallModel.Click += (_, _) => Run("reinstall-model", "Reinstall Demucs v4", () =>
+            Confirm("Reinstall Demucs v4?", "Puts Demucs v4's model in rekordbox again. rekordbox's own model stays saved, so it can still be put back.", "Reinstall") && engine.InstallModel());
+        reinstallCache.Click += (_, _) => Run("reinstall-cache", "Reinstall Stems Cache", () =>
+            Confirm("Reinstall Stems Cache?", "Puts Stems Cache in rekordbox's folder again (Windows asks for permission). The stems already saved are kept.", "Reinstall") && engine.InstallCache());
         uninstallModel.Click += (_, _) => Run("uninstall-model", "Uninstall Demucs v4", () =>
             Confirm("Uninstall Demucs v4?", "Puts rekordbox's own stems model back.", "Uninstall") && engine.UninstallModel());
         uninstallCache.Click += (_, _) => Run("uninstall-cache", "Uninstall Stems Cache", () =>
@@ -165,15 +170,15 @@ public sealed class MainForm : Form, IAsk
         cacheLight.State = lightState;
         tips.SetToolTip(cacheLight, cacheTip ?? (cache ? "Stems Cache is on." : "Stems Cache is off."));
         bool missing = (chosen.Model && !model) || (chosen.Cache && !cache);
-        installModel.Visible = !model; uninstallModel.Visible = model;
-        installCache.Visible = !cache; uninstallCache.Visible = cache || Directory.Exists(p.RootDir);
+        installModel.Visible = !model; uninstallModel.Visible = model; reinstallModel.Visible = model;
+        installCache.Visible = !cache; uninstallCache.Visible = cache || Directory.Exists(p.RootDir); reinstallCache.Visible = cache;
         bool cacheUpdate = cache && saved != null && rb != null && InstalledBridgeSha(rb) is { } have && have != saved.Bridge.Sha256;
         updateCache.Visible = cacheUpdate;
         updateCache.Enabled = !busy;
         reinstall.Visible = missing;
         installModel.Enabled = !busy && modelWhy == null;
         installCache.Enabled = !busy && cacheWhy == null;
-        foreach (var b in new[] { reinstall, uninstallModel, uninstallCache, uninstallAll }) b.Enabled = !busy;
+        foreach (var b in new[] { reinstall, reinstallModel, reinstallCache, uninstallModel, uninstallCache, uninstallAll }) b.Enabled = !busy;
         var lines = new List<string>();
         if (!busy)
         {

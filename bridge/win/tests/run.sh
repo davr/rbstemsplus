@@ -111,6 +111,7 @@ poutcome() { local m="$1"; shift; harness prun "$(winpath "$scratch/pmodel/$m/hd
 fresh unit
 expect '[ "$(run_exe unit.exe sha256 | grep -c "^ok")" = 4 ]' "SHA-256 test vectors: $(run_exe unit.exe sha256 | grep FAIL)"
 expect 'run_exe unit.exe irfft | grep -q "^ok"' "the inverse FFT matches a direct DFT: $(run_exe unit.exe irfft)"
+expect 'grep -aq "rbstems-cache: rebuild=1 location=1 kept=1 pioneer=" "$app/onnxruntime.dll"' "the bridge says what it can cache (location=1 kept=1 before pioneer=), for the app"
 
 # the config fixtures (tests/config-fixtures-windows.txt), as the bridge parses them
 ff="$root/tests/config-fixtures-windows.txt"
@@ -217,6 +218,79 @@ else
     touch -d '3 days ago' "$f" "${f%.flac}.desc"
     out="$(outcome sleep)"
     expect '[ ! -e "$f" ] && has "removed 1 unused for 1 days"' "an entry unused for max_days is removed at the next load"
+
+    # Kept sets (the .kept files of the prepare helper in the kept folder under the Roaming rbstemsplus folder; the same bytes as on the Mac): their entries
+    # never age out, and over max_gb every other entry goes first. A file that isn't exactly a kept set, a set whose date
+    # has passed, or over 5 sets keep nothing. (Ported from bridge/tests/run.sh's kept; no link cases: MSYS links aren't reliable.)
+    kept_tests() {
+      local M c kd now i g
+      M="$(printf 'e%.0s' {1..64})"; now="$(date +%s)"
+      key() { printf '%064x' "$1"; }
+      flac() { local k; k="$(key "$1")"; echo "$c/$M/${k:0:2}/$k.flac"; }
+      mk() { mkdir -p "$(dirname "$(flac "$1")")"; dd if=/dev/zero of="$(flac "$1")" bs=1M count="$2" 2> /dev/null; touch -d "@$3" "$(flac "$1")"; }
+      set_() { local f="$kd/$1" u="$2"; shift 2; mkdir -p "$kd"; { printf 'rbstemsplus-kept 1
+until %s
+' "$u"; for i in "$@"; do printf '%s %s
+' "$M" "$(key "$i")"; done; } > "$f"; }
+      start() { fresh "kept-$1"; c="$(cachef)"; kd="$h/AppData/Roaming/rbstemsplus/kept"; config "$2"; }
+      gone() { g=(); for i in "$@"; do [ -f "$(flac "$i")" ] || g+=("$i"); done; echo "${g[*]:-}"; }
+      local old=$((now - 40 * 86400))
+      start age 'max_days=30
+'
+      mk 1 1 "$old"; mk 2 1 "$old"; set_ set.kept $((now + 86400)) 1
+      outcome sleep > /dev/null
+      expect '[ "$(gone 1 2)" = 2 ] && has "removed 1 unused for 30 days" && has "kept: 1 sets, 1 of their entries in the cache (0.00 GB)"'         "kept: a kept entry doesn't age out, the other one does: gone $(gone 1 2)"
+      start expired 'max_days=30
+'
+      mk 1 1 "$old"; set_ set.kept $((now - 60)) 1
+      outcome sleep > /dev/null
+      expect '[ "$(gone 1)" = 1 ] && ! has "kept:"' "kept: a set whose date has passed keeps nothing, silently"
+      # 0.1 GB: 12 x 10 MiB is over it, emptied down to 90%: three entries go
+      start order 'max_gb=0.1
+'
+      for i in 1 2 3 4 5 6; do mk $i 10 $((now - 172800 + i * 60)); done
+      for i in 7 8 9 10 11 12; do mk $i 10 $((now - 86400 + i * 60)); done
+      set_ set.kept $((now + 86400)) 1 2 3 4 5 6
+      outcome sleep > /dev/null
+      expect '[ "$(gone {1..12})" = "7 8 9" ] && has ", 3 over 0.1 GB" && has "kept: 1 sets, 6 of their entries in the cache"'         "kept: over the limit, the other entries go first, least recently used first: gone $(gone {1..12})"
+      start over 'max_gb=0.1
+'
+      for i in {1..12}; do mk $i 10 $((now - 86400 + i * 60)); done
+      set_ set.kept $((now + 86400)) {1..12}
+      outcome sleep > /dev/null
+      expect '[ "$(gone {1..12})" = "1 2 3" ] && has "kept: 3 kept entries removed: the cache was over 0.1 GB with every other entry gone"'         "kept: kept entries alone over the limit go too, least recently used first: gone $(gone {1..12})"
+      start five 'max_days=30
+'
+      mk 1 1 "$old"; for i in 1 2 3 4 5; do set_ s$i.kept $((now + 86400)) 1; done
+      outcome sleep > /dev/null
+      expect '[ "$(gone 1)" = "" ] && has "kept: 5 sets, 1 of their entries"' "kept: 5 sets (one entry in all of them) keep it"
+      start six 'max_days=30
+'
+      mk 1 1 "$old"; for i in 1 2 3 4 5 6; do set_ s$i.kept $((now + 86400)) 1; done
+      outcome sleep > /dev/null
+      expect '[ "$(gone 1)" = 1 ] && has "kept: 6 sets, over 5: nothing is kept"' "kept: over 5 sets keep nothing"
+      start bad 'max_days=30
+'
+      mk 1 1 "$old"; set_ set.kept $((now + 86400)) 1; printf 'x' >> "$kd/set.kept"
+      outcome sleep > /dev/null
+      expect '[ "$(gone 1)" = 1 ] && has "kept: set.kept ignored: not a kept set"' "kept: a file with one byte more keeps nothing"
+      start upper 'max_days=30
+'
+      mk 1 1 "$old"; set_ set.kept $((now + 86400)) 1; sed -i 's/^e/E/' "$kd/set.kept"
+      outcome sleep > /dev/null
+      expect '[ "$(gone 1)" = 1 ] && has "kept: set.kept ignored: not a kept set"' "kept: capitals in a line keep nothing"
+      start hidden 'max_days=30
+'
+      mk 1 1 "$old"; set_ .set.kept $((now + 86400)) 1
+      outcome sleep > /dev/null
+      expect '[ "$(gone 1)" = 1 ] && ! has "kept:"' "kept: a name starting with a dot (a temporary file) isn't read"
+      start nodir 'max_days=30
+'
+      mk 1 1 "$old"
+      outcome sleep > /dev/null
+      expect '[ "$(gone 1)" = 1 ] && ! has "kept:" && ! has ERROR' "kept: no kept folder: nothing kept, nothing logged"
+    }
+    kept_tests
 
     # a chosen location (any volume: a test build's RBSTEMS_TEST_ANY_VOLUME)
     fresh chosen; anyvol=1
