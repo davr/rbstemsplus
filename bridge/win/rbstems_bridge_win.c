@@ -2530,6 +2530,32 @@ static int cuda_init(void) {                            /* cuda_lock held */
     const OrtApiBase *base = get ? get() : NULL;
     const char *ver = base ? base->GetVersionString() : "";
     if (!base || strncmp(ver, "1.18.", 5)) { logf_("CUDA: %s is ONNX Runtime %s, not 1.18.x: not used", path, ver); FreeLibrary(h); return 0; }
+    /* cuDNN loads its own parts (cudnn_ops_infer64_8.dll ...) by bare name and aborts rekordbox (0xc0000409) when it can't
+     * find them: they sit in this folder, which is not on rekordbox's search path. A module already loaded answers a
+     * bare-name load, so every DLL of the folder is loaded here by full path (the folder is administrators-only). */
+    {
+        wchar_t *wdir = rb_wide(path);
+        wchar_t *sl = wdir ? wcsrchr(wdir, L'\\') : NULL;
+        if (sl) {
+            *sl = 0;
+            wchar_t pat[RB_PATH_MAX], full[RB_PATH_MAX];
+            swprintf(pat, RB_PATH_MAX, L"%ls\\*.dll", wdir);
+            WIN32_FIND_DATAW fd;
+            HANDLE ff = FindFirstFileW(pat, &fd);
+            int n = 0, bad = 0;
+            if (ff != INVALID_HANDLE_VALUE) {
+                do {
+                    if (!_wcsicmp(fd.cFileName, L"onnxruntime.dll")) continue;
+                    swprintf(full, RB_PATH_MAX, L"%ls\\%ls", wdir, fd.cFileName);
+                    if (LoadLibraryExW(full, NULL, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32)) n++;
+                    else { char nm[300]; DWORD e = GetLastError(); if (rb_utf8(fd.cFileName, -1, nm, sizeof nm)) nm[0] = 0; bad++; logf_("CUDA: cannot load %s: error %lu", nm, (unsigned long)e); }
+                } while (FindNextFileW(ff, &fd));
+                FindClose(ff);
+            }
+            logf_("CUDA: %d libraries preloaded%s", n, bad ? " (some failed: the CUDA session will probably fail)" : "");
+        }
+        free(wdir);
+    }
     const OrtApi *api = base->GetApi(ORT_API_VERSION);
     OrtEnv *env = NULL;
     OrtStatus *st = api ? api->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "rbstems-cuda", &env) : NULL;
