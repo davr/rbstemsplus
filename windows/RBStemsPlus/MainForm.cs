@@ -22,6 +22,9 @@ public sealed class MainForm : Form, IAsk
     readonly ToolTip tips = new();
     readonly System.Windows.Forms.Timer refreshTimer = new() { Interval = 5000 };
     ToolStripMenuItem updateItem = null!;
+    readonly TabControl tabs = new() { Dock = DockStyle.Fill };
+    PrepareTab prepareTab = null!;
+    SetsTab setsTab = null!;
     bool busy;
     Manifest? updateAvailable;
 
@@ -70,8 +73,21 @@ public sealed class MainForm : Form, IAsk
         progressBar.Margin = new Padding(12, 0, 12, 0);
         var right = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4, 8, 12, 12) };
         right.Controls.Add(logBox);
-        Controls.Add(right);
-        Controls.Add(left);
+        // upstream 1.3.0's window: Status (the prepared playlists), Prepare, Manage (each feature's buttons, the log)
+        var manage = new TabPage("Manage");
+        manage.Controls.Add(right);
+        manage.Controls.Add(left);
+        prepareTab = new PrepareTab(p, log, () => engine.Saved, () => busy);
+        setsTab = new SetsTab(p, log, () => engine.Saved, id => prepareTab.NameOf(id), () => prepareTab.RunningSet, id => { tabs.SelectedIndex = 1; prepareTab.Select(id); });
+        var status = new TabPage("Status");
+        status.Controls.Add(setsTab);
+        var prepare = new TabPage("Prepare");
+        prepare.Controls.Add(prepareTab);
+        prepareTab.Dock = DockStyle.Fill; setsTab.Dock = DockStyle.Fill;
+        tabs.TabPages.AddRange(new[] { status, prepare, manage });
+        tabs.SelectedIndexChanged += (_, _) => { if (tabs.SelectedIndex == 0) setsTab.Reload(); else if (tabs.SelectedIndex == 1) prepareTab.Shown(); };
+        prepareTab.SetsChanged += () => { if (tabs.SelectedIndex == 0) setsTab.Reload(); };
+        Controls.Add(tabs);
         Controls.Add(lights);
         Controls.Add(menu);
 
@@ -95,7 +111,15 @@ public sealed class MainForm : Form, IAsk
             && engine.InstallCache());
         refreshTimer.Tick += (_, _) => { if (!busy) Refresh2(); CheckShowRequest(); };
         Shown += (_, _) => OnFirstShown();
-        FormClosing += (s, e) => { if (busy) { e.Cancel = true; Tell("RB Stems Plus is busy", "Wait until the change is done."); } };
+        FormClosing += (s, e) =>
+        {
+            if (busy) { e.Cancel = true; Tell("RB Stems Plus is busy", "Wait until the change is done."); return; }
+            if (prepareTab.IsRunning)
+            {
+                if (!Confirm("Stop preparing and quit?", "A playlist is being prepared. It will be stopped first: what is done stays done.", "Stop and Quit")) { e.Cancel = true; return; }
+                prepareTab.StopAndWait();
+            }
+        };
     }
 
     /// The progress bar: a percent, null for "working" (a moving bar), Engine.Hidden to hide it.
@@ -125,6 +149,7 @@ public sealed class MainForm : Form, IAsk
             Files.TryWriteText(p.WelcomedFile, "1\n");
         }
         Refresh2();
+        setsTab.Reload();
         refreshTimer.Start();
         if (State.Leftover(p) is { } left) log.Write($"an earlier run quit during \"{left.Label}\": check the lights, and run it again if needed");
         if (State.TakeReinstallRequest(p) is { } age && age < TimeSpan.FromHours(1)) reinstall.PerformClick();
@@ -210,6 +235,7 @@ public sealed class MainForm : Form, IAsk
     void Run(string id, string label, Func<bool> work)
     {
         if (busy) return;
+        if (!StopPreparingFirst(label)) return;
         busy = true;
         Refresh2();
         State.SetBusy(p, new BusyAction(id, label));
@@ -226,6 +252,14 @@ public sealed class MainForm : Form, IAsk
                 BeginInvoke(() => { busy = false; statusLine.Text = ""; Refresh2(); log.Write($"--- {label}: {(ok ? "done" : "not done")}"); });
             }
         });
+    }
+
+    /// A playlist being prepared reads the model and writes the cache: stopped first (upstream's confirmStopPreparing). False if the user says no.
+    bool StopPreparingFirst(string what)
+    {
+        if (!prepareTab.IsRunning) return true;
+        if (!Confirm("Stop preparing?", $"A playlist is being prepared. It will be stopped before “{what}”: what is done stays done.", "Stop and Continue")) return false;
+        return prepareTab.StopAndWait();
     }
 
     void UninstallEverything()

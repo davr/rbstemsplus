@@ -52,8 +52,26 @@ sealed class Watcher : ApplicationContext
         dirtySince = DateTime.UtcNow;
     }
 
+    int lastSessionPid;
+    readonly SynchronizationContext? ui = SynchronizationContext.Current;
+
+    /// As rekordbox opens: its prepared playlists are checked, once per session (its pid).
+    void CheckSession()
+    {
+        int pid;
+        try { pid = Process.GetProcessesByName("rekordbox").Select(x => x.Id).FirstOrDefault(); } catch (InvalidOperationException) { return; }
+        if (pid == 0 || pid == lastSessionPid) return;
+        lastSessionPid = pid;
+        Task.Run(() =>
+        {
+            try { PrepareWatch.Check(p, log, (title, body) => ui?.Post(_ => Toast.Show(title, body), null)); }
+            catch (Exception e) { log.Write("prepared playlists: check failed: " + e.Message); }
+        });
+    }
+
     void Tick()
     {
+        CheckSession();
         if (asking || dirtySince == DateTime.MinValue) return;
         if (DateTime.UtcNow - dirtySince < TimeSpan.FromSeconds(20)) return;          // let the change finish
         bool busy = State.AppBusy(p);
