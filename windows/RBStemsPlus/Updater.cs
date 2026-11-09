@@ -61,6 +61,19 @@ static class Updater
             File.Move(cur, old);
             try { File.Copy(newExe, cur); }
             catch { File.Move(old, cur); throw; }
+            // the prepare helper travels with the app (a run in progress keeps its old copy: renamed first)
+            try
+            {
+                var newHelper = Path.Combine(Path.GetDirectoryName(newExe)!, PrepareDefaults.HelperName);
+                var curHelper = Path.Combine(Path.GetDirectoryName(cur)!, PrepareDefaults.HelperName);
+                if (File.Exists(newHelper))
+                {
+                    Files.Remove(curHelper + ".old");
+                    if (File.Exists(curHelper)) File.Move(curHelper, curHelper + ".old");
+                    File.Copy(newHelper, curHelper);
+                }
+            }
+            catch (Exception e) { log.Write("update: couldn't replace the prepare helper: " + e.Message); }
             log.Write("update: installed; restarting");
             Process.Start(new ProcessStartInfo(cur) { UseShellExecute = false });
             Application.Exit();
@@ -71,6 +84,7 @@ static class Updater
     public static void CleanUpAfterUpdate()
     {
         try { var old = Environment.ProcessPath + ".old"; if (File.Exists(old)) File.Delete(old); } catch { }
+        try { Files.Remove(Path.Combine(Path.GetDirectoryName(Environment.ProcessPath)!, PrepareDefaults.HelperName + ".old")); } catch { }
     }
 
     /// The end of the complete uninstall: the app's folder, its Start menu shortcut and logs go once it has quit.
