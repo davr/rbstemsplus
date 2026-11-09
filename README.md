@@ -28,6 +28,18 @@ RB Stems Plus is a small app with two features:
 
 Install either one, or both.
 
+### New in this fork: Windows, and CUDA
+
+- **Windows 10 and 11 (rekordbox 7).** A Windows app with the same two features, installed with one
+  PowerShell line. Test builds are published as prereleases while an official release is pending.
+- **Faster Demucs v4 on the CPU:** all your cores (up to 12) instead of rekordbox's few,
+  about 3.4x real time instead of 0.9x.
+- **Optional CUDA on NVIDIA GPUs:** Demucs v4 on the GPU at 20 to 25x real time (RTX 4060 laptop),
+  installed by hand, with an automatic CPU fallback. DirectML can't run Demucs v4 on 8 GB GPUs.
+- **`rbsp-bench`:** a tool that times the model on your PC (CPU, DirectML or CUDA).
+
+How to install, the CUDA steps and troubleshooting: **[RB Stems Plus on Windows](docs/windows.md)**.
+
 ## What you get
 
 ### Which model sounds better? It depends on your music

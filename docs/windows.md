@@ -9,19 +9,25 @@ the [honest risks](../README.md#honest-risks). This page covers what is differen
 
 > **Status: new.** The Windows version was tested with rekordbox **7.2.14** on Windows 11. Its
 > STEMS model is the same file as on the Mac, and its ONNX Runtime is 1.18.0 (DirectML build).
+> On an NVIDIA GPU, Demucs v4 can also run on the GPU through CUDA, about 7 times faster than on
+> the CPU: see [Faster on an NVIDIA GPU (CUDA)](#faster-on-an-nvidia-gpu-cuda).
 
 ## Testing builds from this fork
 
 Until an official, signed release includes Windows, test builds are published as **prereleases**
 of this repository by the `windows-prerelease` workflow. Each says on its page how to install
-it, for example:
+it, for example (the newest so far is `windows-test-10`):
 
 ```powershell
-irm https://github.com/davr/rbstemsplus/releases/download/windows-test-1/bootstrap.ps1 | iex
+irm https://github.com/davr/rbstemsplus/releases/download/windows-test-10/bootstrap.ps1 | iex
 ```
 
 A test build's window title says "TEST BUILD". It downloads everything from its own prerelease,
-and trusts only a key made for that build.
+and trusts only a key made for that build. A prerelease also holds `rbsp-bench.exe`, a tool that
+times the model on your PC (see [For developers](#for-developers)).
+
+To publish one: put a new tag name in `.github/windows-prerelease.tag` (one line, for example
+`windows-test-11`) and push; the workflow builds, signs with a fresh test key and publishes.
 
 ## Before you install
 
@@ -30,7 +36,8 @@ and trusts only a key made for that build.
   so rekordbox has downloaded its STEMS Engine (*Preferences › Extensions › STEMS*).
 - **Stems Cache needs an administrator's permission.** Windows asks once each time Stems Cache is
   installed, reinstalled or removed. Demucs v4 doesn't need it.
-- **Disk space:** about 1.5 GB, plus the saved stems (20 GB at most by default).
+- **Disk space:** about 1.5 GB, plus the saved stems (20 GB at most by default). The optional CUDA
+  runtime needs about 2.3 GB more.
 
 ## Install
 
@@ -57,15 +64,76 @@ and trusts only a key made for that build.
 | Pioneer's original kept in | `%APPDATA%\rbstemsplus\originals\` | `C:\ProgramData\rbstemsplus\pioneer\<version>\` |
 | Needs administrator | no | yes (Windows asks) |
 
+## Speed: CPU, DirectML and CUDA
+
+How fast Demucs v4 separates a track depends on where it runs. Measured on an RTX 4060 Laptop GPU
+(8 GB) with rekordbox 7.2.14; "real time" means a 3-minute track takes 3 minutes at 1x:
+
+| Where it runs | Speed | Notes |
+|---|---|---|
+| rekordbox's own settings (the CPU, few threads) | 0.9x | what rekordbox does by itself |
+| **CPU, up to 12 threads** (the default for Demucs v4) | 3.4x | Stems Cache sets the thread count |
+| DirectML (Windows's GPU layer) | stalls | Demucs v4 needs about 32 GB of video memory there: it never finishes on an 8 GB GPU. Off by default (`gpu_v4=0`) |
+| **CUDA** (NVIDIA only, installed by hand) | 20 to 25x | about 3 to 4 GB of video memory |
+
+- Without CUDA nothing changes: Demucs v4 runs on the CPU. With CUDA installed it runs on the GPU
+  and falls back to the CPU by itself if CUDA fails or stalls, so rekordbox never waits for it.
+- rekordbox's own model can use the GPU through rekordbox's DirectML (`gpu=1`, the default).
+
+## Faster on an NVIDIA GPU (CUDA)
+
+This is **optional, by hand, and not part of the package**: the CUDA files are about 2.3 GB.
+You need an NVIDIA GPU with about 4 GB of free video memory (only an 8 GB card was tested), a current NVIDIA driver
+(CUDA 12 needs 527.41 or newer), and Stems Cache and Demucs v4 installed. It applies to Demucs v4
+only. If anything is missing, Demucs v4 just stays on the CPU.
+
+1. **Collect the files in one folder**, for example `C:\dj\ort-cuda`:
+   - from ONNX Runtime 1.18.0's release,
+     [`onnxruntime-win-x64-gpu-cuda12-1.18.0.zip`](https://github.com/microsoft/onnxruntime/releases/tag/v1.18.0):
+     `onnxruntime.dll`, `onnxruntime_providers_cuda.dll`, `onnxruntime_providers_shared.dll`;
+   - from NVIDIA's Python packages (`pip download <name>==<version> --no-deps --platform win_amd64
+     --only-binary=:all:`, then open each `.whl` as a zip and take its `.dll` files):
+     `nvidia-cuda-runtime-cu12` 12.4 (`cudart64_12.dll`), `nvidia-cublas-cu12` 12.4
+     (`cublas64_12.dll`, `cublasLt64_12.dll`), `nvidia-cufft-cu12` 11.2.1.3 (`cufft64_11.dll`),
+     `nvidia-curand-cu12` 10.3.5.147 (`curand64_10.dll`) and **`nvidia-cudnn-cu12` 8.9.7.29**
+     (all of `cudnn*64_8.dll`, including the `_train` ones).
+   - It must be **cuDNN 8**: this ONNX Runtime build links `cudnn64_8.dll`, and cuDNN 9 or a CUDA 13
+     toolkit don't work with it.
+2. **Install them, from an administrator PowerShell** (the bridge only loads files that nobody but
+   administrators can change):
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts\windows-install-cuda.ps1 -Source C:\dj\ort-cuda
+   ```
+
+   It copies the DLLs to `C:\ProgramData\rbstemsplus\ort-cuda` with administrator-only permissions.
+   Install Stems Cache first: the script needs `C:\ProgramData\rbstemsplus` to exist.
+   `-Remove` takes it away again. Uninstalling Stems Cache or RB Stems Plus deletes it too.
+3. **Open rekordbox, load a track.** `%LOCALAPPDATA%\rbstemsplus\Logs\bridge.log` should say:
+   - `CUDA: ONNX Runtime 1.18.0 loaded from C:\ProgramData\rbstemsplus\ort-cuda\onnxruntime.dll`
+   - `CUDA: session opened for model ...`
+   - `Demucs session opened: ... on the GPU (CUDA; this CPU session is the fallback)`
+   - `CUDA run: ... s` for the first three chunks, then `miss ... the model took 0.4 s: 25x real time`.
+
+How it works, briefly: Pioneer's ONNX Runtime has no CUDA, so the bridge loads a second, CUDA
+ONNX Runtime next to it and runs only Demucs v4 there. It copies each chunk across, runs it,
+copies the stems back, and keeps a CPU session as the fallback. Its memory is sized to the
+requests with a 5 GiB limit (about 3.2 to 3.9 GB used). `cuda=0` in `config.ini` turns it off.
+
 Other files:
 - **Saved stems:** `%LOCALAPPDATA%\rbstemsplus\Cache`, or a folder named
   `RB Stems Plus Cache` on an external drive, chosen in Settings.
 - **Settings:** `%APPDATA%\rbstemsplus\config.ini`.
-- **GPU:** `gpu=1` (the default) makes Stems Cache run Demucs v4 on the GPU through rekordbox's DirectML; `gpu=0` (or the Settings checkbox) keeps it on the CPU. The bridge falls back to the CPU if DirectML fails, and `bridge.log` says which one ran.
+- **GPU settings** (Settings checkboxes, or `config.ini`):
+  - `gpu=1` (the default): rekordbox's own model runs on the GPU through DirectML; `gpu=0` keeps everything on the CPU.
+  - `gpu_v4=0` (the default): Demucs v4 stays off DirectML, where it stalls on 8 GB GPUs. `gpu_v4=1` is experimental.
+  - `cuda=1` (the default, `config.ini` only): Demucs v4 on CUDA when the runtime above is installed; `cuda=0` turns it off. It also needs `gpu=1`.
+  - A GPU run that fails or takes too long is answered by the CPU and the model stays there until rekordbox restarts. `bridge.log` says which one ran.
 - **Logs:** `%LOCALAPPDATA%\rbstemsplus\Logs`.
 - **The copy of Pioneer's ONNX Runtime that Stems Cache uses:**
   `C:\ProgramData\rbstemsplus\ort\onnxruntime.dll`. Only administrators can change it. Stems
   Cache refuses to load a copy that other accounts can change.
+- **The CUDA runtime (optional):** `C:\ProgramData\rbstemsplus\ort-cuda\`, administrator-only like `ort`.
 - **Reinstall reminders:** a small helper, *RB Stems Plus Watcher*, starts when you sign in. It
   appears in *Settings › Apps › Startup*. It only asks you to reinstall after a rekordbox update;
   it never changes anything by itself.
@@ -117,6 +185,19 @@ Reinstalling rekordbox from rekordbox.com also always gives you Pioneer's files.
   and the system tray.
 - **Stems Cache's light is yellow with "its drive isn't connected".** Connect the drive you chose in
   Settings, or choose **Use This PC**.
+- **Demucs v4 is slow (about 3x real time).** That is the CPU speed. For an NVIDIA GPU see
+  [Faster on an NVIDIA GPU (CUDA)](#faster-on-an-nvidia-gpu-cuda).
+- **`bridge.log` says "CUDA: no CUDA ONNX Runtime installed" or "no NVIDIA GPU".** Nothing is
+  wrong: Demucs v4 runs on the CPU. Install the CUDA runtime, or ignore it.
+- **`bridge.log` says "CUDA: ... is ONNX Runtime x, not 1.18.x" or "cannot load".** The files in
+  `ort-cuda` are the wrong version or incomplete (for example cuDNN 9 instead of 8). Use the exact
+  versions listed above.
+- **`bridge.log` says "real library ...: can be changed by others than administrators".** Install
+  the CUDA files with `windows-install-cuda.ps1` from an administrator PowerShell, not by copying.
+- **`bridge.log` says "CUDA run failed" or "took over its deadline".** That model now runs on the
+  CPU until rekordbox restarts. Send the log if it keeps happening.
+- **rekordbox closes when it opens a track, with CUDA installed.** Windows's event log names the
+  module (`cudnn64_8.dll` meant a missing cuDNN part). Set `cuda=0` in `config.ini` and send the log.
 - **Making a problem report.**
   1. Choose *Help › Create Report*. It saves a zip on your Desktop and can open a new GitHub
      issue.
@@ -161,5 +242,26 @@ Microsoft's .NET 8 SDK:
   scripts/build-windows.sh --test http://127.0.0.1:8765/
   ```
 
+- the benchmark tool, `rbsp-bench.exe` (built into `dist/` and attached to every prerelease): runs
+  a Demucs model outside rekordbox with timing, video memory and node placement.
+
+  ```powershell
+  rbsp-bench --model hdemucs.onnx --cpu --threads 12                  # the CPU
+  rbsp-bench --model hdemucs.onnx --dml 0                             # DirectML on adapter 0
+  rbsp-bench --model hdemucs.onnx --cuda --ort C:\dj\ort-cuda\onnxruntime.dll `
+             --cuda-opt arena_extend_strategy=kSameAsRequested --cuda-opt gpu_mem_limit=5368709120
+  ```
+
+  Add `--timeout S` so a stalled run ends; the options are listed by `rbsp-bench` alone.
+- model variants for DirectML experiments (fp16, fixed shapes):
+  `scripts/gpu-experiments/make_variants.py MODEL.onnx OUT_DIR`. They did not help: DirectML
+  allocates every intermediate tensor in fp32 up front.
+- installing the bridge into rekordbox without the UAC prompt (an already-elevated shell):
+
+  ```powershell
+  RBStemsPlus.exe --elevated install-cache "C:\Program Files\rekordbox\rekordbox 7.2.14" 7.2.14.0323 <bridge file> <its sha256>
+  ```
+
 `.github/workflows/windows.yml` runs all of these, plus the install command and the ACL checks on
-a real Windows runner.
+a real Windows runner. The findings behind the GPU work are in
+[`windows-port/GPU.md`](windows-port/GPU.md) and [`windows-port/GPU-BENCH.md`](windows-port/GPU-BENCH.md).
