@@ -34,7 +34,7 @@ if [ ! -f "$ort/onnxruntime.dll" ] && [ -z "${RBSTEMS_WIN_ORT:-}" ]; then
     && (cd "$root/build/ort" && unzip -oq ort.zip) || true
 fi
 [ -f "$ort/onnxruntime.dll" ] || { echo "FAIL no ONNX Runtime for the model tests"; exit 1; }
-mkdir -p "$scratch/model" "$scratch/audio" "$scratch/rb"
+mkdir -p "$scratch/model" "$scratch/audio" "$scratch/rb" "$scratch/c6"
 python3 -I "$here/make_model.py" "$scratch/model/hdemucs.onnx" || { echo "FAIL no test model (python3 onnx)"; exit 1; }
 ours="$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$scratch/model/hdemucs.onnx")"
 python3 -I "$here/make_audio.py" "$scratch/audio" "$ours" || { echo "FAIL test audio"; exit 1; }
@@ -81,6 +81,14 @@ expect 'grep -q "\"result\":\"ready\",\"entries\":2" <<< "$est2"' "estimate afte
 # AIFF decodes to the same samples, so the same entries
 run3="$(prep "${common[@]}" --cache "$(P "$cache")" --kept-dir "$(P "$kdir")" --no-keep "$aif")"
 expect 'grep -q "\"written\":0,\"already\":2" <<< "$run3"' "the AIFF gives the WAV's entries: $run3"
+
+# ---------------------------------------------------------------- the CUDA path falls back to the CPU
+# a "CUDA ONNX Runtime" that has no CUDA (Microsoft's CPU build): the session fails, the CPU runs, entries are written
+c5="$scratch/c5"; k5="$scratch/k5"; mkdir -p "$c5" "$k5"
+out="$(cd "$app" && RBSP_TEST_OURS="$ours" RBSP_TEST_FREE_GB=900 RBSP_TEST_CUDA_PATH="$(P "$ort/onnxruntime.dll")" $WINE ./rbsp-prepare.exe "${common[@]}" --cache "$(P "$c5")" --kept-dir "$(P "$k5")" --no-keep "$wav" 2>&1 | tr -d '\r')"
+expect 'grep -q "CUDA: the CUDA session failed, the CPU is used" <<< "$out" && grep -q "\"written\":2" <<< "$out"' "CUDA that can't start: the CPU takes over and the entries are written: $out"
+out="$(cd "$app" && RBSP_TEST_OURS="$ours" RBSP_TEST_FREE_GB=900 RBSP_TEST_CUDA_PATH="$(P "$scratch/nothing/onnxruntime.dll")" $WINE ./rbsp-prepare.exe "${common[@]}" --cache "$(P "$scratch/c6")" --no-keep "$wav" 2>&1 | tr -d '\r')"
+expect 'grep -q "\"written\":2" <<< "$out"' "no CUDA library: the CPU is used: $out"
 
 # ---------------------------------------------------------------- stop and pause (the app's events)
 c2="$scratch/c2"; k2="$scratch/k2"; mkdir -p "$c2" "$k2"

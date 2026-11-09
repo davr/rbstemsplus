@@ -9,6 +9,7 @@
  * event means "not signaled". */
 #include <shellapi.h>
 #include "../model.h"
+#include "onnxruntime_c_api.h"
 
 int prepare_main(int argc, char **argv);              /* prepare.c, with main renamed */
 int model_run_inner(model *m, const float *mix, size_t L, int ours, float **x, float **xt, size_t *F, char *why, size_t whyn);

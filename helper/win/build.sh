@@ -122,12 +122,17 @@ if [ -n "$test_ours" ]; then
 fi
 [ "$(grep -c 'rbp_abs(path)' "$obj/prepare_gen.c")" = 2 ] || { echo "helper/prepare.c changed: its two path tests no longer match helper/win/build.sh's" >&2; exit 1; }
 cc -Dmain=prepare_main -c "$obj/prepare_gen.c" -o "$obj/prepare.o"
-# model.c: ONNX Runtime takes a UTF-16 path here; main's model_run is glue_win.c's (it waits while paused)
-sed 's|R->CreateSession(env, path, o, &m->s)|R->CreateSession(env, rbp_wide_path(path), o, \&m->s)|' "$hs/model.c" > "$obj/model_gen.c"
-[ "$(grep -c 'rbp_wide_path(path)' "$obj/model_gen.c")" = 1 ] || { echo "helper/model.c changed: its CreateSession call no longer matches helper/win/build.sh's" >&2; exit 1; }
-cc -Dmodel_run=model_run_inner -c "$obj/model_gen.c" -o "$obj/model.o"
+# model.c, built twice: cpu_* (Pioneer's ONNX Runtime) and cuda_* (the CUDA one, the CUDA provider added to the
+# session options); cuda_win.c chooses. ONNX Runtime takes a UTF-16 model path here (one sed line); main's model_run
+# is glue_win.c's (it waits while paused) and calls cuda_win.c's model_run_inner.
+sed 's|R->CreateSession(env, path, o, &m->s)|R->CreateSession(env, rbp_wide_path(path), o, \&m->s)|' "$hs/model.c" > "$obj/model_cpu.c"
+[ "$(grep -c 'rbp_wide_path(path)' "$obj/model_cpu.c")" = 1 ] || { echo "helper/model.c changed: its CreateSession call no longer matches helper/win/build.sh's" >&2; exit 1; }
+sed 's/|| fail(R->CreateSession(/|| fail(rbp_cuda_options(R, o), why, whyn) || fail(R->CreateSession(/; s|#include "rbsp.h"|#include "rbsp.h"\nOrtStatus *rbp_cuda_options(const OrtApi *, OrtSessionOptions *);|' "$obj/model_cpu.c" > "$obj/model_cuda.c"
+[ "$(grep -c 'rbp_cuda_options(R, o)' "$obj/model_cuda.c")" = 1 ] || { echo "helper/model.c changed: the CUDA insertion point no longer matches" >&2; exit 1; }
+cc -Dmodel_load_ort=cpu_model_load_ort -Dmodel_open=cpu_model_open -Dmodel_close=cpu_model_close -Dmodel_run=cpu_model_run -c "$obj/model_cpu.c" -o "$obj/model_cpu.o"
+cc -Dmodel_load_ort=cuda_model_load_ort -Dmodel_open=cuda_model_open -Dmodel_close=cuda_model_close -Dmodel_run=cuda_model_run -c "$obj/model_cuda.c" -o "$obj/model_cuda.o"
 cc -ffp-contract=off -c "$hs/resample.c" -o "$obj/resample.o"          # rekordbox's fused multiply-adds only where it has them
 for f in mp3 mp4 manifest entry; do cc -c "$hs/$f.c" -o "$obj/$f.o"; done
-for f in decode_win kept_win library_win big_win readable_win glue_win; do cc -c "$here/$f.c" -o "$obj/$f.o"; done
+for f in decode_win kept_win library_win big_win readable_win glue_win cuda_win; do cc -c "$here/$f.c" -o "$obj/$f.o"; done
 "$CC" "$obj"/*.o "$flac/lib/libFLAC.a" -static-libgcc -lmfplat -lmfreadwrite -lmfuuid -lole32 -lshell32 -ladvapi32 -luuid -o "$out/rbsp-prepare.exe"
 echo "built $out/rbsp-prepare.exe"
