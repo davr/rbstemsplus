@@ -34,8 +34,8 @@ if [ ! -f "$ort/onnxruntime.dll" ] && [ -z "${RBSTEMS_WIN_ORT:-}" ]; then
     && (cd "$root/build/ort" && unzip -oq ort.zip) || true
 fi
 [ -f "$ort/onnxruntime.dll" ] || { echo "FAIL no ONNX Runtime for the model tests"; exit 1; }
-mkdir -p "$scratch/model" "$scratch/audio" "$scratch/rb" "$scratch/c6"
-python3 -I "$here/make_model.py" "$scratch/model/hdemucs.onnx" || { echo "FAIL no test model (python3 onnx)"; exit 1; }
+mkdir -p "$scratch/model" "$scratch/audio" "$scratch/rb" "$scratch/c6" "$scratch/empty"
+python3 -I "$here/make_model.py" "$scratch/model/hdemucs.onnx" || { echo "FAIL no test model"; exit 1; }
 ours="$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$scratch/model/hdemucs.onnx")"
 python3 -I "$here/make_audio.py" "$scratch/audio" "$ours" || { echo "FAIL test audio"; exit 1; }
 keys=($(python3 -c 'import json,sys;print(*json.load(open(sys.argv[1]))["keys"])' "$scratch/audio/a.expected.json"))
@@ -52,8 +52,27 @@ mkdir -p "$scratch/c0" "$scratch/k0"
 out="$(prep --model "$(P "$app/rbsp-prepare.exe")" --cache "$(P "$scratch/c0")" "$(P "$scratch/audio/a.wav")")"
 expect 'grep -q "not a model the bridge caches" <<< "$out"' "a model that isn't ours or Pioneer's is refused: $out"
 echo junk > "$scratch/audio/x.ogg"
-out="$(prep --playlists --library "$(P "$scratch/none.db")" 2>&1)"
+out="$(prep --playlists --rekordbox "$(P "$scratch/empty")" --library "$(P "$scratch/none.db")" 2>&1)"
 expect 'grep -q "sqlite3.dll" <<< "$out"' "--playlists without rekordbox's sqlite3.dll says so: $out"
+
+# ---------------------------------------------------------------- the library (a plain SQLite stand-in for master.db)
+SQLITE_VERSION=3460100 SQLITE_SHA256=77823cb110929c2bcb0f5d48e4833b5c59a8a6e40cdea3936b99e199dbbe5784
+sq="$root/build/sqlite/sqlite-amalgamation-$SQLITE_VERSION"
+if [ ! -f "$sq/sqlite3.c" ]; then
+  mkdir -p "$root/build/sqlite"
+  curl -fsSL -o "$root/build/sqlite/a.zip" "https://www.sqlite.org/2024/sqlite-amalgamation-$SQLITE_VERSION.zip" \
+    && [ "$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$root/build/sqlite/a.zip")" = "$SQLITE_SHA256" ] \
+    && (cd "$root/build/sqlite" && unzip -oq a.zip) || rm -f "$root/build/sqlite/a.zip"
+fi
+if [ -f "$sq/sqlite3.c" ] && "$CC" -shared -O1 -w -DSQLITE_API='__declspec(dllexport)' -DSQLITE_THREADSAFE=1 -I"$sq" "$sq/sqlite3.c" "$here/fakekey.c" -static-libgcc -o "$scratch/rb/sqlite3.dll"; then
+  python3 -I "$here/make_library.py" "$scratch/master.db"
+  pl="$(prep --playlists --rekordbox "$(P "$scratch/rb")" --library "$(P "$scratch/master.db")")"
+  expect '[ "$(wc -l <<< "$pl")" = 5 ] && sed -n 1p <<< "$pl" | grep -q "\"playlist\":\"1\".*\"name\":\"Folder F\",\"kind\":\"folder\",\"tracks\":0" && sed -n 2p <<< "$pl" | grep -q "\"playlist\":\"2\".*\"parent\":\"1\".*\"tracks\":5" && sed -n 3p <<< "$pl" | grep -q "\"name\":\"Zed\"" && sed -n 4p <<< "$pl" | grep -q "\"name\":\"Set B\"" && sed -n 5p <<< "$pl" | grep -q "\"kind\":\"intelligent\""' "--playlists: parents first, rekordbox's order, deleted ones left out: $pl"
+  tr_="$(prep --tracks 2 --rekordbox "$(P "$scratch/rb")" --library "$(P "$scratch/master.db")")"
+  expect '[ "$(wc -l <<< "$tr_")" = 3 ] && sed -n 1p <<< "$tr_" | grep -qF "{\"file\":\"C:\\\\Music\\\\a.wav\"}" && sed -n 2p <<< "$tr_" | grep -qF "C:/Music/b.flac" && sed -n 3p <<< "$tr_" | grep -q "M.*sica.*mp3"' "--tracks: in rekordbox's order, each path once, streaming left out: $tr_"
+  expect 'grep -q "is a folder, not a playlist" <<< "$(prep --tracks 1 --rekordbox "$(P "$scratch/rb")" --library "$(P "$scratch/master.db")")"' "--tracks on a folder is refused"
+  expect 'grep -q "has no playlist 99" <<< "$(prep --tracks 99 --rekordbox "$(P "$scratch/rb")" --library "$(P "$scratch/master.db")")"' "--tracks on an unknown playlist is refused"
+else skip "the library tests (no SQLite amalgamation)"; fi
 
 # ---------------------------------------------------------------- estimate
 cache="$scratch/c1"; kdir="$scratch/k1"; mkdir -p "$cache" "$kdir"
