@@ -161,6 +161,7 @@ else
     fresh gpu1; near=
     out="$(outcome a)"
     expect 'has "gpu_v4=0: Demucs v4 on the GPU is experimental"' "our model, defaults: stays on the CPU (gpu_v4=0): got \"$out\""
+    expect 'has "memory pattern off, "' "our model on the CPU: sets the thread count (session line): got \"$out\""
     fresh gpu2; near=; config 'gpu=0\n'
     out="$(outcome a)"
     expect 'has "on the CPU (gpu=0 in config.ini)"' "gpu=0: on the CPU, and says so: got \"$out\""

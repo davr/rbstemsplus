@@ -51,6 +51,10 @@ jobs:
           git config user.email ci@example.invalid && git config user.name ci
           scripts/build-windows.sh --test "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/"
           grep -qF "releases/download/${TAG}/" dist-test/bootstrap.ps1
+      - name: "experimental GPU model variants (fp16, fixed shapes)"
+        run: |
+          pip install --quiet onnx onnxsim onnxruntime onnxconverter-common numpy
+          python3 -P scripts/gpu-experiments/make_variants.py dist-test/stemsplus-model.onnx dist-test/variants
       - name: "the prerelease"
         run: |
           cd dist-test
@@ -68,5 +72,6 @@ jobs:
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
             --title "RB Stems Plus for Windows (TEST, $TAG)" --notes-file notes.md \
             rbstemsplus-windows.zip onnxruntime.dll stemsplus-model.onnx bootstrap.ps1 rbsp-bench.exe \
-            payload-windows.json payload-windows.json.sig SHA256SUMS-windows
+            payload-windows.json payload-windows.json.sig SHA256SUMS-windows \
+            variants/stemsplus-model-fp16.onnx variants/stemsplus-model-dml.onnx variants/stemsplus-model-dml-fp16.onnx
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name'

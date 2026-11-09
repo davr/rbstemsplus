@@ -138,10 +138,11 @@ static void die(const char *what, OrtStatus *st) {
 
 static void usage(void) {
     printf("usage: rbsp-bench --model FILE [--dml N | --cpu] [--runs N] [--samples N] [--frames N] [--timeout S]\n"
-           "                  [--threads N] [--ort DLL] [--rb DIR] [--profile] [--verbose]\n"
+           "                  [--threads N] [--opt 0|1|2|99] [--ort DLL] [--rb DIR] [--profile] [--verbose]\n"
            "  --dml N     the DXGI adapter to run on (default: the one rekordbox's bridge picks); --cpu: no GPU\n"
            "  --runs N    runs after a first, warm-up one (default 3)\n"
            "  --samples N / --frames N   the chunk: mix [1,2,N], mag [1,4,2048,F] (defaults 485100 / ceil(samples/1024))\n"
+           "  --opt L     ONNX Runtime graph optimization: 0 none, 1 basic, 2 extended, 99 all (default)\n"
            "  --threads N CPU threads with --cpu (default 4)\n"
            "  --timeout S end a run that takes longer than S seconds (default 180)\n"
            "  --ort DLL   the onnxruntime.dll to use (default %%ProgramData%%\\rbstemsplus\\ort\\onnxruntime.dll)\n"
@@ -182,7 +183,7 @@ static int find_rb(wchar_t *out, size_t n) {
 int main(int argc, char **argv) {
     const char *model = NULL, *ort_arg = NULL, *rb_arg = NULL;
     int dml = -2, cpu = 0, runs = 3, profile = 0;
-    long samples = 485100, frames = 0, threads = 4;
+    long samples = 485100, frames = 0, threads = 4, opt = -1;
     g_timeout = 180;
     setvbuf(stdout, NULL, _IONBF, 0);
     for (int i = 1; i < argc; i++) {
@@ -195,6 +196,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--samples") && more) samples = atol(argv[++i]);
         else if (!strcmp(a, "--frames") && more) frames = atol(argv[++i]);
         else if (!strcmp(a, "--threads") && more) threads = atol(argv[++i]);
+        else if (!strcmp(a, "--opt") && more) opt = atol(argv[++i]);
         else if (!strcmp(a, "--timeout") && more) g_timeout = atof(argv[++i]);
         else if (!strcmp(a, "--ort") && more) ort_arg = argv[++i];
         else if (!strcmp(a, "--rb") && more) rb_arg = argv[++i];
@@ -240,6 +242,10 @@ int main(int argc, char **argv) {
     if (st) die("env", st);
     if ((st = R->CreateSessionOptions(&so))) die("options", st);
     R->SetSessionLogSeverityLevel(so, 0);
+    if (opt >= 0) {                                         /* 0 none, 1 basic, 2 extended, 99 all (the default) */
+        R->SetSessionGraphOptimizationLevel(so, opt == 0 ? ORT_DISABLE_ALL : opt == 1 ? ORT_ENABLE_BASIC : opt == 2 ? ORT_ENABLE_EXTENDED : ORT_ENABLE_ALL);
+        printf("graph optimization level %ld\n", opt);
+    }
     if (cpu) { R->SetIntraOpNumThreads(so, (int)threads); printf("CPU threads: %ld\n", threads); }
     if (!cpu) {
         R->DisableMemPattern(so);
@@ -319,6 +325,18 @@ int main(int argc, char **argv) {
             break;
         }
         printf("run %d%s: %.2f s = %.2fx real time (a %.1f s chunk)\n", r, r ? "" : " (warm-up)", t, chunk / t, chunk);
+        if (r == 0 && nout > 1) {                           /* the second output (xt, the stems): finite, and its size, to compare with the CPU */
+            float *xt = NULL;
+            OrtTensorTypeAndShapeInfo *ti = NULL;
+            size_t cnt = 0;
+            if (!R->GetTensorMutableData(out[1], (void **)&xt) && !R->GetTensorTypeAndShape(out[1], &ti) && !R->GetTensorShapeElementCount(ti, &cnt) && xt) {
+                double sum = 0, mx = 0;
+                size_t bad = 0;
+                for (size_t k = 0; k < cnt; k++) { if (!isfinite(xt[k])) bad++; else { sum += fabs(xt[k]); if (fabs(xt[k]) > mx) mx = fabs(xt[k]); } }
+                printf("output %s: %zu values, %zu not finite, mean|.| %.6g, max|.| %.6g\n", out_names[1], cnt, bad, cnt ? sum / (double)cnt : 0.0, mx);
+            }
+            if (ti) R->ReleaseTensorTypeAndShapeInfo(ti);
+        }
         if (r) { total += t; ok++; }
     }
     if (ok) printf("average of %d runs: %.2f s = %.2fx real time\n", ok, total / ok, chunk / (total / ok));

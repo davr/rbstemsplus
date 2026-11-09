@@ -2463,6 +2463,17 @@ static int add_dml(OrtSessionOptions *o, const char **what) {
     return 0;
 }
 
+/* How many CPU threads our model's CPU sessions get. rekordbox's own options leave Demucs v4 at
+ * 0.88x real time; the same model measured with rbsp-bench: 4 threads 2.5x, 12 threads 3.4x (an
+ * 8 GB RTX 4060 laptop, 2026-11-09). All logical processors, at most 12. */
+static int cpu_threads(void) {
+    DWORD n = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+#ifdef RBSTEMS_TEST_REAL_PATH
+    if (getenv("RBSTEMS_TEST_CPU_THREADS")) n = (DWORD)atoi(getenv("RBSTEMS_TEST_CPU_THREADS"));
+#endif
+    return n < 1 ? 1 : n > 12 ? 12 : (int)n;
+}
+
 /* A Demucs session: a copy of rekordbox's options with DirectML added (gpu=1) and, for our model,
  * the memory pattern off (measured: 2.26 GB peak with it, 1.75 GB without, same speed). If the
  * GPU session can't be made, the same without DirectML; if anything about the copy fails,
@@ -2485,6 +2496,7 @@ static OrtStatus *create_demucs(const OrtEnv *env, const ORTCHAR_T *path, const 
 #endif
         /* DirectML needs the memory pattern off, whichever model it is */
         if (!st && (ours || attempt == 0)) st = R->DisableMemPattern(o);
+        if (!st && ours && attempt == 1) st = R->SetIntraOpNumThreads(o, cpu_threads());   /* on the CPU: use the cores */
         if (!st && attempt == 0) {
             with_dml = add_dml(o, &dml_what) == 0;
             if (!with_dml) {
@@ -2497,8 +2509,10 @@ static OrtStatus *create_demucs(const OrtEnv *env, const ORTCHAR_T *path, const 
         if (!st) st = R->CreateSession(env, path, o, out);  /* the session keeps its own copy of o */
         if (o) R->ReleaseSessionOptions(o);
         if (!st) {
-            snprintf(howbuf, sizeof howbuf, "%s%s%s", ours ? "memory pattern off" : "rekordbox's session options",
-                     with_dml ? ", " : "", with_dml ? dml_what : "");
+            char thr[40] = "";
+            if (ours && !with_dml) snprintf(thr, sizeof thr, ", %d CPU threads", cpu_threads());
+            snprintf(howbuf, sizeof howbuf, "%s%s%s%s", ours ? "memory pattern off" : "rekordbox's session options",
+                     thr, with_dml ? ", " : "", with_dml ? dml_what : "");
             *how = howbuf;
             *gpu = with_dml;
             return NULL;
@@ -2612,7 +2626,7 @@ static OrtStatus *ORT_API_CALL hook_CreateSession(const OrtEnv *env, const ORTCH
     if (st || (!cached && !on_gpu)) return st;
     /* a GPU session is watched: what a CPU twin is made from (rekordbox's options, as they were) is kept */
     OrtSessionOptions *copts = NULL;
-    if (on_gpu && options && !R->CloneSessionOptions(options, &copts) && is_ours(fp)) R->DisableMemPattern(copts);
+    if (on_gpu && options && !R->CloneSessionOptions(options, &copts) && is_ours(fp)) { R->DisableMemPattern(copts); R->SetIntraOpNumThreads(copts, cpu_threads()); }
     wchar_t *wpath = on_gpu ? wcsdup(model_path) : NULL;
     int stored = 0;
     rb_lock(&lock);

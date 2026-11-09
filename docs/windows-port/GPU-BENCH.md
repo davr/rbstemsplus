@@ -33,3 +33,16 @@ Other options: `--threads N` (CPU threads with `--cpu`, default 4: the bench sho
 - With neither memory nor placement explaining a slow run, use `--profile`: the json names the slow operators.
 
 Send the whole output of each command.
+
+## Results so far (RTX 4060 Laptop 8 GB, rekordbox 7.2.14, 2026-11-09)
+- **rekordbox's own model on DirectML:** 0.25 s per chunk (43x real time), 1.2 GB of video memory, 304 of 1,368 nodes on the CPU. Fine.
+- **Our Demucs v4 on the CPU:** 4 threads 2.5x, 12 threads 3.4x real time (3.2 s per chunk). rekordbox's own session options gave 0.88x; windows-test-8 sets up to 12 threads for our model's CPU sessions.
+- **Our Demucs v4 on DirectML:** the first run never finishes, with dedicated memory at the card's size (8.9 to 9.5 GB; shared 0.1 to 4 GB). The same with a 2 s chunk, and with the fixed-shape model, where all nodes sit on DirectML. So it isn't graph splitting or the chunk length.
+- **Memory arithmetic (fixed-shape model, from its graph):** weights 287 MB; activations alive at once ~0.6 GB, but all intermediate tensors together 31.9 GB, of which about a hundred attention matrices are 220 MB each. DirectML doesn't recycle activation memory the way the CPU does, so this is what to shrink.
+
+## Memory experiments (windows-test-8)
+Extra assets of the prerelease, made by `scripts/gpu-experiments/make_variants.py`:
+- `stemsplus-model-fp16.onnx`, `stemsplus-model-dml-fp16.onnx`: fp16 weights and activations (half the memory); inputs and outputs stay fp32, and the input normalisation stays fp32.
+- `stemsplus-model-dml.onnx`: the fixed-shape model again.
+
+`--opt 0|1|2|99` sets ONNX Runtime's graph optimization level, which also decides what DirectML fuses. The bench prints `output xt: ... mean|.| ... max|.|`; for the bench's own input the fp32 CPU model gives mean|.| 0.2589, max|.| 1.581 over 3,880,800 values (an fp16 result close to those is right; NaNs or `not finite` mean fp16 overflowed).
