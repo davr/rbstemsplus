@@ -111,7 +111,8 @@ public static class Prepare
         public int Refused { get; init; }
         public double Seconds { get; init; }
         public double GB { get; init; }
-        public string Name => System.IO.Path.GetFileName(File.Replace('/', '\\'));
+        /// The file's name: after the last '\\' or '/' (a Windows path, also when this runs elsewhere).
+        public string Name => File.Substring(File.LastIndexOfAny(new[] { '\\', '/' }) + 1);
     }
 
     static JsonElement? Line(string line)
@@ -360,7 +361,7 @@ public static class Prepare
 
     /// A line for the logs, which never hold track names or paths: every path in it becomes <path>.
     public static string NoPaths(string s) =>
-        System.Text.RegularExpressions.Regex.Replace(s, @"([A-Za-z]:|\\\\)[\\/][^\r\n:;,)""]*", "<path>");
+        System.Text.RegularExpressions.Regex.Replace(s, @"([A-Za-z]:[\\/]|\\\\)[^\r\n:;,)""]*", "<path>");
 
     /// "1 h 05 min", "12 min", "under a minute"
     public static string DurationText(double s)
