@@ -41,3 +41,12 @@ In the library (69 files profiled by `ffprobe`), 59 of 60 M4A, 38 of 40 FLAC and
 - The AAC reader must request **16-bit PCM** from Media Foundation.
 - The helper uses **rekordbox's own `libmpg123.dll`**, found in its folder, like the macOS helper.
 - Same format of kept sets, manifests and entries as macOS (kept files are byte-identical).
+
+## Helper status (`rbsp-prepare.exe`, branch `integrate/upstream-1.3.0`)
+Running log; newest last.
+- **Shim (`helper/win/posix.h`)**: the POSIX calls upstream's sources use (stat with nanosecond mtime, openat family,
+  directory listing, dlopen, getline) over `bridge/win/win_compat.h`. Upstream `manifest.c`, `mp4.c`, `resample.c`
+  and `mp3.c` compile **unchanged** with mingw-w64 (`-include win/posix.h`). Compiled only; not yet linked or run.
+- **Not started**: CLI (`prepare_win.c`), library reader (SQLCipher via rekordbox's `sqlite3.dll`), kept sets,
+  entry writer, model run, FLAC/AIFF/WAV decode, Media Foundation AAC, build script, CI.
+- **Cannot be tested here**: anything needing rekordbox's DLLs, Media Foundation, a real `master.db`.
