@@ -2557,8 +2557,12 @@ static int cuda_acquire(const wchar_t *model_path, const char *fp) {
         OrtStatus *st = CR->CreateSessionOptions(&o);
         if (!st) st = CR->CreateCUDAProviderOptions(&p);
         if (!st) {
-            const char *keys[] = {"device_id", "cudnn_conv_algo_search"}, *vals[] = {"0", "HEURISTIC"};   /* DXGI's order isn't CUDA's: the first NVIDIA GPU */
-            st = CR->UpdateCUDAProviderOptions(p, keys, vals, 2);
+            /* device 0: DXGI's order isn't CUDA's, so the first NVIDIA GPU. The arena that grows by powers of two took
+             * all 8 GB of an RTX 4060 and spilled into shared memory (2x real time); sized to the requests with a 5 GiB
+             * cap it peaks at 3.9 GB and runs 20 to 24x real time (rbsp-bench --cuda, 2026-11-09) */
+            const char *keys[] = {"device_id", "cudnn_conv_algo_search", "arena_extend_strategy", "gpu_mem_limit"};
+            const char *vals[] = {"0", "HEURISTIC", "kSameAsRequested", "5368709120"};
+            st = CR->UpdateCUDAProviderOptions(p, keys, vals, 4);
         }
         if (!st) st = CR->SessionOptionsAppendExecutionProvider_CUDA_V2(o, p);
         if (!st) st = CR->SetSessionGraphOptimizationLevel(o, ORT_ENABLE_ALL);
