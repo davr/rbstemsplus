@@ -105,3 +105,10 @@ Compare our model with rekordbox's own. With `rekordbox_model=1` the bridge time
 - A CUDA error or a missed deadline turns CUDA off for good: that run and every later one go to the CPU session. `config.ini` `cuda=0` turns it off (default 1; it does nothing without the `ort-cuda` folder). With CUDA, DirectML is not added to our model's session.
 - Still to do: build it in CI (no mingw here), the installer/CI side that puts `ort-cuda` in place, a test stand-in, real-PC runs.
 - **The runtime DLLs are not in the NVIDIA driver.** cuBLAS, cuDNN and the CUDA runtime come with the toolkit or have to ship with the package. ONNX Runtime 1.18 needs CUDA 12 (or 11.8) and cuDNN 9 (8 for 11.8). The test PC has only CUDA 13.4 (`cublas64_13.dll`), which 1.18 can't use. So the download is the ~1.5 to 2 GB estimated above, or the user installs CUDA 12 and cuDNN 9 themselves.
+
+### CUDA bench results (RTX 4060 Laptop, 8 GB, 2026-11-09; `rbsp-bench --cuda`, fixed-shape fp32 model)
+- ONNX Runtime 1.18.0 **CUDA 12 build needs cuDNN 8** (`cudnn64_8.dll`; 8.9.7 works), plus cuBLAS 12, cuFFT 11, cuRAND 10 and the CUDA 12 runtime next to its `onnxruntime.dll`. The pip `nvidia-*-cu12` wheels for Windows carry them. cuDNN 9 is not enough: the provider fails to load with error 126.
+- Defaults: the first run 1.8 s, later runs about 5 s (2x real time) because the arena takes all 8.12 GB and spills.
+- `arena_extend_strategy=kSameAsRequested`: 0.55 s per 11 s chunk (20x real time), 6.9 GB peak.
+- plus `gpu_mem_limit=5368709120`: 0.45 to 0.56 s (20 to 24x), **3.9 GB peak**. The bridge uses these two.
+- All 2966 nodes run on CUDA. The CPU path is 3.4x.
