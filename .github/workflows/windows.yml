@@ -39,6 +39,7 @@ jobs:
           path: |
             dist-test/rbstemsplus-windows.zip
             dist-test/onnxruntime.dll
+            dist-test/rbsp-bench.exe
             dist-test/bootstrap.ps1
             dist-test/payload-windows.json
             dist-test/payload-windows.json.sig
