@@ -73,7 +73,7 @@ static class PrepareEnv
         try { proc = Process.Start(Start(args)); }
         catch (Exception e) when (e is System.ComponentModel.Win32Exception or IOException) { return (-1, "", "the helper can't start: " + e.Message); }
         if (proc == null) return (-1, "", "the helper can't start");
-        using var _ = proc;
+        using var guard = proc;
         var o = new StringBuilder();
         var err = new StringBuilder();
         proc.ErrorDataReceived += (_, e) => { if (e.Data != null) lock (err) err.AppendLine(e.Data); };

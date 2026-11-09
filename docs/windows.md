@@ -141,6 +141,37 @@ Other files:
 Unlike on the Mac, nothing is re-signed. rekordbox's own files keep AlphaTheta's signature, except
 the one `onnxruntime.dll` that Stems Cache replaces.
 
+## Prepare playlists before a set (RB Stems Plus 1.3)
+
+> **In development on Windows.** The window (three tabs: **Status**, **Prepare**, **Manage**) and the checks are
+> in; the helper that makes the stems, `rbsp-prepare.exe`, is being ported from the Mac version (what works and
+> what doesn't is in [`windows-port/PREPARE.md`](windows-port/PREPARE.md)). Without the helper the Prepare tab
+> says so and stays off.
+
+With Stems Cache installed, the **Prepare** tab makes a playlist's stems in advance, so every track of it loads
+with its stems at once in rekordbox, as if you had loaded it before (it writes the same entries rekordbox would).
+
+1. Choose a playlist on the left (rekordbox's own list, read only). The tab says how many tracks are ready, how
+   many it will prepare, how much space that takes and about how long.
+2. Choose until when to keep them (10 days by default), then click **Prepare**. It works in the background: you
+   can keep using the PC and rekordbox. **Pause** and **Stop** are there; what is done stays done.
+3. The **Status** tab lists the prepared playlists (5 at most, together at most 75% of Stems Cache's size limit)
+   and whether each is still ready. When rekordbox opens, RB Stems Plus checks them too and shows a Windows
+   notification if a track isn't fully prepared any more (changed, moved, removed from the cache, or added to
+   the playlist): click **Prepare** again for those.
+
+What to know:
+- **Prepared stems are used only when rekordbox is set to *Prioritize sound quality*** (Preferences › Extensions
+  › STEMS). With *Prioritize speed* rekordbox uses another engine and the Prepare tab says so.
+- **Supported tracks (so far): 44.1 kHz MP3, AAC (M4A), ALAC, FLAC, AIFF and WAV.** A prepared entry is found by
+  rekordbox only if the helper decodes the file exactly as rekordbox does; this was measured for these formats on
+  rekordbox 7.2.14. Other sample rates are listed as *Skipped*; so is anything the helper can't decode.
+- **Demucs v4 only for now.** With rekordbox's own model installed, preparing is refused.
+- It uses the GPU through CUDA when the optional runtime is installed (see above), else the CPU.
+- Installing, uninstalling, updating or clearing stems stops a run first (it asks). Quitting stops it too.
+- The kept sets are files in `%APPDATA%\rbstemsplus\kept`; Stems Cache never removes their stems while the date
+  hasn't passed (unless its size limit is lowered below them). **Stop Keeping** on the Status tab lets one go.
+
 ## The lights
 
 The lights work as on the Mac:
