@@ -4,7 +4,7 @@
  * it directly: no bridge, no cache. Prints the adapters, each run's time and real-time factor, the
  * peak dedicated and shared video memory, and how ONNX Runtime placed the nodes (GPU, CPU, copies).
  *
- *   rbsp-bench --model FILE [--dml N | --cpu] [--runs N] [--samples N] [--frames N] [--timeout S]
+ *   rbsp-bench --model FILE [--dml N | --cpu | --cuda] [--runs N] [--samples N] [--frames N] [--timeout S]
  *              [--ort DLL] [--rb DIR] [--profile] [--verbose]
  */
 #define WIN32_LEAN_AND_MEAN
@@ -137,7 +137,7 @@ static void die(const char *what, OrtStatus *st) {
 }
 
 static void usage(void) {
-    printf("usage: rbsp-bench --model FILE [--dml N | --cpu] [--runs N] [--samples N] [--frames N] [--timeout S]\n"
+    printf("usage: rbsp-bench --model FILE [--dml N | --cpu | --cuda] [--runs N] [--samples N] [--frames N] [--timeout S]\n"
            "                  [--threads N] [--opt 0|1|2|99] [--ort DLL] [--rb DIR] [--profile] [--verbose]\n"
            "  --dml N     the DXGI adapter to run on (default: the one rekordbox's bridge picks); --cpu: no GPU\n"
            "  --runs N    runs after a first, warm-up one (default 3)\n"
@@ -182,7 +182,7 @@ static int find_rb(wchar_t *out, size_t n) {
 
 int main(int argc, char **argv) {
     const char *model = NULL, *ort_arg = NULL, *rb_arg = NULL;
-    int dml = -2, cpu = 0, runs = 3, profile = 0;
+    int dml = -2, cpu = 0, cuda = 0, runs = 3, profile = 0;
     long samples = 485100, frames = 0, threads = 4, opt = -1;
     g_timeout = 180;
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -192,6 +192,7 @@ int main(int argc, char **argv) {
         if (!strcmp(a, "--model") && more) model = argv[++i];
         else if (!strcmp(a, "--dml") && more) dml = atoi(argv[++i]);
         else if (!strcmp(a, "--cpu")) cpu = 1;
+        else if (!strcmp(a, "--cuda")) cuda = 1;
         else if (!strcmp(a, "--runs") && more) runs = atoi(argv[++i]);
         else if (!strcmp(a, "--samples") && more) samples = atol(argv[++i]);
         else if (!strcmp(a, "--frames") && more) frames = atol(argv[++i]);
@@ -216,12 +217,18 @@ int main(int argc, char **argv) {
     wchar_t rb[MAX_PATH] = L"", ort[MAX_PATH] = L"";
     if (rb_arg) { wchar_t *w = wide(rb_arg); wcsncpy(rb, w, MAX_PATH - 1); free(w); }
     else if (find_rb(rb, MAX_PATH)) wcscpy(rb, L"");
-    if (rb[0]) { SetDllDirectoryW(rb); wprintf(L"DirectML from %ls\n", rb); }
+    if (rb[0] && !cuda) { SetDllDirectoryW(rb); wprintf(L"DirectML from %ls\n", rb); }
     if (ort_arg) { wchar_t *w = wide(ort_arg); wcsncpy(ort, w, MAX_PATH - 1); free(w); }
     else {
         wchar_t pd[MAX_PATH];
         if (!GetEnvironmentVariableW(L"ProgramData", pd, MAX_PATH)) wcscpy(pd, L"C:\\ProgramData");
         swprintf(ort, MAX_PATH, L"%ls\\rbstemsplus\\ort\\onnxruntime.dll", pd);
+    }
+    if (cuda) {   /* the CUDA libraries sit next to its onnxruntime.dll */
+        wchar_t dir[MAX_PATH];
+        wcsncpy(dir, ort, MAX_PATH - 1); dir[MAX_PATH - 1] = 0;
+        wchar_t *sl = wcsrchr(dir, L'\\');
+        if (sl) { *sl = 0; SetDllDirectoryW(dir); }
     }
     HMODULE h = LoadLibraryExW(ort, NULL, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_USER_DIRS);
     if (!h) h = LoadLibraryW(ort);
@@ -234,7 +241,7 @@ int main(int argc, char **argv) {
     if (!R) { printf("FAIL this library has no 1.18 API\n"); return 1; }
     OrtStatus *(ORT_API_CALL *append_dml)(OrtSessionOptions *, int) =
         (OrtStatus *(ORT_API_CALL *)(OrtSessionOptions *, int))(void *)GetProcAddress(h, "OrtSessionOptionsAppendExecutionProvider_DML");
-    if (!cpu && !append_dml) { printf("FAIL this ONNX Runtime has no DirectML: use --cpu or --ort\n"); return 1; }
+    if (!cpu && !cuda && !append_dml) { printf("FAIL this ONNX Runtime has no DirectML: use --cpu or --ort\n"); return 1; }
 
     OrtEnv *env = NULL;
     OrtSessionOptions *so = NULL;
@@ -247,7 +254,15 @@ int main(int argc, char **argv) {
         printf("graph optimization level %ld\n", opt);
     }
     if (cpu) { R->SetIntraOpNumThreads(so, (int)threads); printf("CPU threads: %ld\n", threads); }
-    if (!cpu) {
+    if (cuda) {   /* a CUDA ONNX Runtime (onnxruntime-gpu 1.18, CUDA 12, cuDNN 9) */
+        OrtCUDAProviderOptionsV2 *co = NULL;
+        const char *keys[] = {"device_id", "cudnn_conv_algo_search"}, *vals[] = {"0", "HEURISTIC"};
+        if ((st = R->CreateCUDAProviderOptions(&co))) die("CUDA options", st);
+        if ((st = R->UpdateCUDAProviderOptions(co, keys, vals, 2))) die("CUDA options", st);
+        if ((st = R->SessionOptionsAppendExecutionProvider_CUDA_V2(so, co))) die("CUDA", st);
+        R->ReleaseCUDAProviderOptions(co);
+        printf("running on the GPU: CUDA device 0 (video memory sampled on DXGI adapter %d)\n", dml);
+    } else if (!cpu) {
         R->DisableMemPattern(so);
         R->SetSessionExecutionMode(so, ORT_SEQUENTIAL);
         if ((st = append_dml(so, dml))) die("DirectML", st);
