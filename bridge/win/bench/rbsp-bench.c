@@ -85,14 +85,14 @@ static int best_adapter(void) {
 
 static volatile int sampling;
 static int sample_adapter = -1;
-static double peak_local, peak_shared, start_local, start_shared;
+static double peak_local, peak_shared, start_local, start_shared, cur_local, cur_shared;
 static void sample_once(void) {
     if (sample_adapter < 0 || !adapters[sample_adapter]) return;
     com *a = adapters[sample_adapter];
     vminfo l = {0}, s = {0};
     qvmi_t q = (qvmi_t)(*(void ***)a)[14];
-    if (q(a, 0, 0, &l) >= 0 && l.CurrentUsage / 1073741824.0 > peak_local) peak_local = l.CurrentUsage / 1073741824.0;
-    if (q(a, 0, 1, &s) >= 0 && s.CurrentUsage / 1073741824.0 > peak_shared) peak_shared = s.CurrentUsage / 1073741824.0;
+    if (q(a, 0, 0, &l) >= 0) { cur_local = l.CurrentUsage / 1073741824.0; if (cur_local > peak_local) peak_local = cur_local; }
+    if (q(a, 0, 1, &s) >= 0) { cur_shared = s.CurrentUsage / 1073741824.0; if (cur_shared > peak_shared) peak_shared = cur_shared; }
 }
 static DWORD WINAPI sampler(LPVOID p) {
     (void)p;
@@ -120,9 +120,13 @@ static double g_timeout;
 static volatile int g_fired;
 static DWORD WINAPI watch(LPVOID p) {
     (void)p;
-    if (WaitForSingleObject(g_done, (DWORD)(g_timeout * 1000)) == WAIT_TIMEOUT) {
-        g_fired = 1;
-        R->RunOptionsSetTerminate(g_ro);
+    double waited = 0;
+    while (WaitForSingleObject(g_done, 5000) == WAIT_TIMEOUT) {
+        waited += 5;
+        sample_once();
+        if (sample_adapter >= 0) printf("  ... still running after %.0f s; video memory now: dedicated %.2f GB, shared %.2f GB\n", waited, cur_local, cur_shared);
+        else printf("  ... still running after %.0f s\n", waited);
+        if (waited >= g_timeout) { g_fired = 1; R->RunOptionsSetTerminate(g_ro); break; }
     }
     return 0;
 }
@@ -134,10 +138,11 @@ static void die(const char *what, OrtStatus *st) {
 
 static void usage(void) {
     printf("usage: rbsp-bench --model FILE [--dml N | --cpu] [--runs N] [--samples N] [--frames N] [--timeout S]\n"
-           "                  [--ort DLL] [--rb DIR] [--profile] [--verbose]\n"
+           "                  [--threads N] [--ort DLL] [--rb DIR] [--profile] [--verbose]\n"
            "  --dml N     the DXGI adapter to run on (default: the one rekordbox's bridge picks); --cpu: no GPU\n"
            "  --runs N    runs after a first, warm-up one (default 3)\n"
-           "  --samples N / --frames N   the chunk: mix [1,2,N], mag [1,4,2048,F] (defaults 485100 / 474)\n"
+           "  --samples N / --frames N   the chunk: mix [1,2,N], mag [1,4,2048,F] (defaults 485100 / ceil(samples/1024))\n"
+           "  --threads N CPU threads with --cpu (default 4)\n"
            "  --timeout S end a run that takes longer than S seconds (default 180)\n"
            "  --ort DLL   the onnxruntime.dll to use (default %%ProgramData%%\\rbstemsplus\\ort\\onnxruntime.dll)\n"
            "  --rb DIR    the folder with DirectML.dll (default: the newest rekordbox under Program Files)\n"
@@ -177,7 +182,7 @@ static int find_rb(wchar_t *out, size_t n) {
 int main(int argc, char **argv) {
     const char *model = NULL, *ort_arg = NULL, *rb_arg = NULL;
     int dml = -2, cpu = 0, runs = 3, profile = 0;
-    long samples = 485100, frames = 474;
+    long samples = 485100, frames = 0, threads = 4;
     g_timeout = 180;
     setvbuf(stdout, NULL, _IONBF, 0);
     for (int i = 1; i < argc; i++) {
@@ -189,6 +194,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--runs") && more) runs = atoi(argv[++i]);
         else if (!strcmp(a, "--samples") && more) samples = atol(argv[++i]);
         else if (!strcmp(a, "--frames") && more) frames = atol(argv[++i]);
+        else if (!strcmp(a, "--threads") && more) threads = atol(argv[++i]);
         else if (!strcmp(a, "--timeout") && more) g_timeout = atof(argv[++i]);
         else if (!strcmp(a, "--ort") && more) ort_arg = argv[++i];
         else if (!strcmp(a, "--rb") && more) rb_arg = argv[++i];
@@ -196,7 +202,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--verbose")) verbose = 1;
         else { usage(); return 2; }
     }
-    if (!model || runs < 1 || samples < 1024 || frames < 1) { usage(); return 2; }
+    if (frames < 1) frames = (samples + 1023) / 1024;
+    if (!model || runs < 1 || samples < 1024 || threads < 1) { usage(); return 2; }
 
     list_adapters();
     if (!cpu && dml == -2) dml = best_adapter();
@@ -233,7 +240,7 @@ int main(int argc, char **argv) {
     if (st) die("env", st);
     if ((st = R->CreateSessionOptions(&so))) die("options", st);
     R->SetSessionLogSeverityLevel(so, 0);
-    if (cpu) R->SetIntraOpNumThreads(so, 4);
+    if (cpu) { R->SetIntraOpNumThreads(so, (int)threads); printf("CPU threads: %ld\n", threads); }
     if (!cpu) {
         R->DisableMemPattern(so);
         R->SetSessionExecutionMode(so, ORT_SEQUENTIAL);
@@ -277,7 +284,7 @@ int main(int argc, char **argv) {
             R->GetDimensions(ts, dims, rank)) { printf("FAIL input %zu isn't a tensor\n", i); return 1; }
         size_t count = 1;
         for (size_t d = 0; d < rank; d++) {
-            if (dims[d] <= 0) dims[d] = rank == 3 && d == 2 ? samples : rank == 4 && d == 3 ? frames : rank == 4 && d == 1 ? 4 : rank == 3 && d == 1 ? 2 : 1;
+            if (dims[d] <= 0) dims[d] = rank == 3 && d == 2 ? samples : rank == 4 && d == 3 ? frames : rank == 4 && d == 2 ? 2048 : rank == 4 && d == 1 ? 4 : rank == 3 && d == 1 ? 2 : 1;
             count *= (size_t)dims[d];
         }
         float *data = malloc(count * sizeof(float));
