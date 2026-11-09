@@ -263,8 +263,7 @@ int main(int argc, char **argv) {
         OrtCUDAProviderOptionsV2 *co = NULL;
         const char *keys[16] = {"device_id", "cudnn_conv_algo_search"}, *vals[16] = {"0", "HEURISTIC"};
         int nk = 2;
-        for (int k = 0; k < ncopt; k++) { keys[nk] = copt_k[k]; vals[nk++] = copt_v[k]; printf("CUDA option %s=%s
-", copt_k[k], copt_v[k]); }
+        for (int k = 0; k < ncopt; k++) { keys[nk] = copt_k[k]; vals[nk++] = copt_v[k]; printf("CUDA option %s=%s\n", copt_k[k], copt_v[k]); }
         if ((st = R->CreateCUDAProviderOptions(&co))) die("CUDA options", st);
         if ((st = R->UpdateCUDAProviderOptions(co, keys, vals, (size_t)nk))) die("CUDA options", st);
         if ((st = R->SessionOptionsAppendExecutionProvider_CUDA_V2(so, co))) die("CUDA", st);
