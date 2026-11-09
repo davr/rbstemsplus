@@ -112,3 +112,8 @@ Compare our model with rekordbox's own. With `rekordbox_model=1` the bridge time
 - `arena_extend_strategy=kSameAsRequested`: 0.55 s per 11 s chunk (20x real time), 6.9 GB peak.
 - plus `gpu_mem_limit=5368709120`: 0.45 to 0.56 s (20 to 24x), **3.9 GB peak**. The bridge uses these two.
 - All 2966 nodes run on CUDA. The CPU path is 3.4x.
+
+### Installing the CUDA runtime by hand (not in the package)
+1. Put ONNX Runtime 1.18.0's **CUDA 12** build (`onnxruntime-win-x64-gpu-cuda12-1.18.0.zip` from the ONNX Runtime release: `onnxruntime.dll`, `onnxruntime_providers_cuda.dll`, `onnxruntime_providers_shared.dll`) and these DLLs from NVIDIA's pip wheels in one folder: `cublas64_12`, `cublasLt64_12`, `cudart64_12` (nvidia-cublas-cu12 12.4, nvidia-cuda-runtime-cu12 12.4), `cufft64_11` (nvidia-cufft-cu12 11.2.1.3), `curand64_10` (nvidia-curand-cu12 10.3.5.147), and all of `cudnn*64_8` (nvidia-cudnn-cu12 8.9.7.29, the win_amd64 wheel). The `*_train64_8` ones are needed too.
+2. From an elevated PowerShell: `scripts\windows-install-cuda.ps1 -Source <folder>` (`-Remove` removes it). Uninstalling RB Stems Plus deletes the whole `%ProgramData%\rbstemsplus` folder, ort-cuda included.
+3. `bridge.log` says "CUDA: ONNX Runtime 1.18.0 loaded", "CUDA: session opened" and, for the first runs, "CUDA run: x s". `cuda=0` in config.ini turns it off.
