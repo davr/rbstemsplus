@@ -117,3 +117,9 @@ Compare our model with rekordbox's own. With `rekordbox_model=1` the bridge time
 1. Put ONNX Runtime 1.18.0's **CUDA 12** build (`onnxruntime-win-x64-gpu-cuda12-1.18.0.zip` from the ONNX Runtime release: `onnxruntime.dll`, `onnxruntime_providers_cuda.dll`, `onnxruntime_providers_shared.dll`) and these DLLs from NVIDIA's pip wheels in one folder: `cublas64_12`, `cublasLt64_12`, `cudart64_12` (nvidia-cublas-cu12 12.4, nvidia-cuda-runtime-cu12 12.4), `cufft64_11` (nvidia-cufft-cu12 11.2.1.3), `curand64_10` (nvidia-curand-cu12 10.3.5.147), and all of `cudnn*64_8` (nvidia-cudnn-cu12 8.9.7.29, the win_amd64 wheel). The `*_train64_8` ones are needed too.
 2. From an elevated PowerShell: `scripts\windows-install-cuda.ps1 -Source <folder>` (`-Remove` removes it). Uninstalling RB Stems Plus deletes the whole `%ProgramData%\rbstemsplus` folder, ort-cuda included.
 3. `bridge.log` says "CUDA: ONNX Runtime 1.18.0 loaded", "CUDA: session opened" and, for the first runs, "CUDA run: x s". `cuda=0` in config.ini turns it off.
+
+### CUDA in rekordbox 7.2.14 (windows-test-10, RTX 4060 Laptop, 2026-11-09): works
+- cuDNN loads its parts by bare name and aborted rekordbox (0xc0000409 in `cudnn64_8.dll`) until the bridge preloaded every DLL of `ort-cuda` by full path.
+- A track's 37 chunks separated at **0.4 s per 11 s chunk (25x real time)**, GPU memory about 3.2 GB, no fallback, no errors; the CPU path was 3.4x.
+- `bridge.log`: "CUDA: session opened", "Demucs session opened: ... on the GPU (CUDA; this CPU session is the fallback)", "CUDA run: x s" (the first three runs), then the usual "miss" lines with the model time.
+- Installing for tests without UAC: `gsudo RBStemsPlus.exe --elevated install-cache "<rekordbox folder>" <version> <bridge file> <sha256>`.

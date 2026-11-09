@@ -2545,7 +2545,7 @@ static int cuda_init(void) {                            /* cuda_lock held */
             int n = 0, bad = 0;
             if (ff != INVALID_HANDLE_VALUE) {
                 do {
-                    if (!_wcsicmp(fd.cFileName, L"onnxruntime.dll")) continue;
+                    if (!_wcsnicmp(fd.cFileName, L"onnxruntime", 11)) continue;           /* ONNX Runtime loads its own providers (preloaded alone, the CUDA one fails to initialise: error 1114) */
                     swprintf(full, RB_PATH_MAX, L"%ls\\%ls", wdir, fd.cFileName);
                     if (LoadLibraryExW(full, NULL, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32)) n++;
                     else { char nm[300]; DWORD e = GetLastError(); if (rb_utf8(fd.cFileName, -1, nm, sizeof nm)) nm[0] = 0; bad++; logf_("CUDA: cannot load %s: error %lu", nm, (unsigned long)e); }
