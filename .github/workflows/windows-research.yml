@@ -1,0 +1,29 @@
+# Research builds for the Windows port (never published, never a release): a bridge that dumps every chunk
+# rekordbox sends the model (RBSTEMS_DUMP_DIR), to compare with what the prepare helper decodes. Started by
+# hand (workflow_dispatch) or by a push that changes .github/windows-research.trigger. The artifact is kept 7 days.
+name: windows-research
+
+on:
+  push:
+    paths: [".github/windows-research.trigger"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dump-bridge:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: "tools"
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mingw-w64 xz-utils > /dev/null
+      - name: "the dump bridge"
+        run: RBSTEMS_DUMP_DIR='C:\rbstems-dump' bridge/win/build.sh build/dump
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dump-bridge
+          path: build/dump/onnxruntime.dll
+          retention-days: 7
