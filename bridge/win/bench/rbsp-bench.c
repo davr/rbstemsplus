@@ -181,8 +181,8 @@ static int find_rb(wchar_t *out, size_t n) {
 }
 
 int main(int argc, char **argv) {
-    const char *model = NULL, *ort_arg = NULL, *rb_arg = NULL;
-    int dml = -2, cpu = 0, cuda = 0, runs = 3, profile = 0;
+    const char *model = NULL, *ort_arg = NULL, *rb_arg = NULL, *copt_k[16], *copt_v[16];
+    int dml = -2, cpu = 0, cuda = 0, ncopt = 0, runs = 3, profile = 0;
     long samples = 485100, frames = 0, threads = 4, opt = -1;
     g_timeout = 180;
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -193,6 +193,11 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--dml") && more) dml = atoi(argv[++i]);
         else if (!strcmp(a, "--cpu")) cpu = 1;
         else if (!strcmp(a, "--cuda")) cuda = 1;
+        else if (!strcmp(a, "--cuda-opt") && more && ncopt < 14) {   /* key=value for the CUDA provider, e.g. gpu_mem_limit=4294967296 */
+            char *kv = _strdup(argv[++i]), *eq = strchr(kv, '=');
+            if (!eq) { usage(); return 2; }
+            *eq = 0; copt_k[ncopt] = kv; copt_v[ncopt++] = eq + 1;
+        }
         else if (!strcmp(a, "--runs") && more) runs = atoi(argv[++i]);
         else if (!strcmp(a, "--samples") && more) samples = atol(argv[++i]);
         else if (!strcmp(a, "--frames") && more) frames = atol(argv[++i]);
@@ -256,9 +261,12 @@ int main(int argc, char **argv) {
     if (cpu) { R->SetIntraOpNumThreads(so, (int)threads); printf("CPU threads: %ld\n", threads); }
     if (cuda) {   /* a CUDA ONNX Runtime (onnxruntime-gpu 1.18, CUDA 12, cuDNN 9) */
         OrtCUDAProviderOptionsV2 *co = NULL;
-        const char *keys[] = {"device_id", "cudnn_conv_algo_search"}, *vals[] = {"0", "HEURISTIC"};
+        const char *keys[16] = {"device_id", "cudnn_conv_algo_search"}, *vals[16] = {"0", "HEURISTIC"};
+        int nk = 2;
+        for (int k = 0; k < ncopt; k++) { keys[nk] = copt_k[k]; vals[nk++] = copt_v[k]; printf("CUDA option %s=%s
+", copt_k[k], copt_v[k]); }
         if ((st = R->CreateCUDAProviderOptions(&co))) die("CUDA options", st);
-        if ((st = R->UpdateCUDAProviderOptions(co, keys, vals, 2))) die("CUDA options", st);
+        if ((st = R->UpdateCUDAProviderOptions(co, keys, vals, (size_t)nk))) die("CUDA options", st);
         if ((st = R->SessionOptionsAppendExecutionProvider_CUDA_V2(so, co))) die("CUDA", st);
         R->ReleaseCUDAProviderOptions(co);
         printf("running on the GPU: CUDA device 0 (video memory sampled on DXGI adapter %d)\n", dml);
