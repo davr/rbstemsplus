@@ -35,6 +35,7 @@ size() { wc -c < "$1" | tr -d ' '; }
 commit="$(git -C "$root" rev-parse HEAD)" || die "not a git checkout"
 changes="$(git -C "$root" status --porcelain)"
 if [ -z "$test_base" ]; then
+  [ -z "${RBSTEMS_DUMP_DIR:-}" ] || die "RBSTEMS_DUMP_DIR is set (a research bridge that dumps every chunk): unset it for a release"
   [ -z "$changes" ] || die "uncommitted or untracked files (git status): a release is built only from a commit"
   for k in release backup; do [ -f "$root/keys/$k.pub.pem" ] || die "keys/$k.pub.pem is missing"; done
 elif [ -n "$changes" ]; then

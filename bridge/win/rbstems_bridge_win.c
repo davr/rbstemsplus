@@ -3402,6 +3402,27 @@ static OrtStatus *run_inner(OrtSession *s, const OrtRunOptions *ro, const char *
     rb_sha_update(&c, mix.data, (size_t)(mix.count * sizeof(float)));
     rb_sha_final(dg, &c);
     hex(dg, 32, key);
+#ifdef RBSTEMS_DUMP_DIR
+    /* research builds only (bridge/win/build.sh with RBSTEMS_DUMP_DIR set; never a release): the chunk
+     * rekordbox sends, as raw float32, <ms since 1970>-<key>.mix (2 x L, planar) and .mag */
+    {
+        FILETIME ft;
+        GetSystemTimeAsFileTime(&ft);
+        long long ms = (long long)((((unsigned long long)ft.dwHighDateTime << 32 | ft.dwLowDateTime) - 116444736000000000ULL) / 10000ULL);
+        const tensor *t[2] = {&mix, &mag};
+        const char *ext[2] = {"mix", "mag"};
+        CreateDirectoryA(RBSTEMS_DUMP_DIR, NULL);
+        for (int k = 0; k < 2; k++) {
+            char p[RB_PATH_MAX];
+            snprintf(p, sizeof p, "%s\\%013lld-%s.%s", RBSTEMS_DUMP_DIR, ms, key, ext[k]);
+            FILE *f = fopen(p, "wb");
+            if (!f) { logf_("dump: can't write %s", p); continue; }
+            size_t n = fwrite(t[k]->data, sizeof(float), t[k]->count, f);
+            if (fclose(f) || n != t[k]->count) logf_("dump: %s is incomplete", p);
+        }
+        logf_("dump: %.12s (%zu samples)", key, L);
+    }
+#endif
     int64_t xdims[5] = {1, 4, mag.dims[1], mag.dims[2], mag.dims[3]}, xtdims[3] = {1, 8, (int64_t)L};
     int16_t *pcm = malloc(L * 8 * sizeof(int16_t));
     float *desc = malloc(sizeof(float) * 2 * DESC_MAX_FRAMES);

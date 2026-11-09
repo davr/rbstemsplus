@@ -100,6 +100,15 @@ if [ -n "$test_path" ]; then
   defines="$defines -DRBSTEMS_TEST_REAL_PATH=\"$lit\""
   note="TEST: real library from $test_path"
 fi
+# research only: RBSTEMS_DUMP_DIR=C:\rbstems-dump writes every chunk rekordbox sends there (scripts/build-windows.sh
+# refuses it for a release): to compare what the prepare helper decodes with what Windows rekordbox decodes
+if [ -n "${RBSTEMS_DUMP_DIR:-}" ]; then
+  case "$RBSTEMS_DUMP_DIR" in [A-Za-z]:\\*|[A-Za-z]:/*) ;; *) echo "RBSTEMS_DUMP_DIR must be an absolute Windows path (C:\\folder)" >&2; exit 2 ;; esac
+  case "$RBSTEMS_DUMP_DIR" in *'"'*) echo "RBSTEMS_DUMP_DIR can't contain a double quote" >&2; exit 2 ;; esac
+  dlit="$(printf '%s' "$RBSTEMS_DUMP_DIR" | sed 's/\\/\\\\/g')"
+  defines="$defines -DRBSTEMS_DUMP_DIR=\"$dlit\""
+  note="$note, DUMP to $RBSTEMS_DUMP_DIR"
+fi
 if [ -n "$unit" ]; then
   # shellcheck disable=SC2086
   "$CC" -O1 -Wall -Wextra -Wno-cast-function-type -Wno-unused-function -std=gnu11 \
