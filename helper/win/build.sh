@@ -21,7 +21,9 @@ mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 HOST=x86_64-w64-mingw32
 CC="${CC_WIN:-$HOST-gcc}"
+CXX="${CXX_WIN:-$HOST-g++}"
 command -v "$CC" >/dev/null || { echo "helper/win/build.sh: $CC not found (install mingw-w64)" >&2; exit 1; }
+command -v "$CXX" >/dev/null || { echo "helper/win/build.sh: $CXX not found (install g++-mingw-w64)" >&2; exit 1; }
 FLAC_VERSION="$(sed -n 's/^FLAC_VERSION=//p' "$root/bridge/win/build.sh")"
 FLAC_SHA256="$(sed -n 's/^FLAC_SHA256=//p' "$root/bridge/win/build.sh")"
 FLAC_URLS="https://downloads.xiph.org/releases/flac/flac-$FLAC_VERSION.tar.xz https://github.com/xiph/flac/releases/download/$FLAC_VERSION/flac-$FLAC_VERSION.tar.xz"
@@ -68,6 +70,26 @@ if [ ! -f "$flac/lib/libFLAC.a" ]; then
   cp "$scratch/flac-$FLAC_VERSION/src/libFLAC/.libs/libFLAC.a" "$flac/lib/libFLAC.a"
   rm -rf "$scratch"
 fi
+
+# ---------------------------------------------------------------- Apple's ALAC decoder
+# github.com/macosforge/alac (Apache License 2.0), the codec/ files, each sha256-checked; used by alac_win.cpp
+alac="$root/build/helper-win/alac"
+alac_get() {   # alac_get FILE SHA256
+  fetch "$alac/$1" "$2" "https://raw.githubusercontent.com/macosforge/alac/master/codec/$1"
+}
+alac_get ALACAudioTypes.h a0fe17bf82191d28c500b9ee1e773d49700df5e33ad862ed61b13c8a094c03b9
+alac_get ALACBitUtilities.c 276ac7d7f2d240a4b0437d7e222afcba4c78bd8fd8104d0e9c6b0d45f67abcfe
+alac_get ALACBitUtilities.h 18d1c8f957a403cc5b9b7d99e9d3987001adeac6ceadb4a4b1b5dc1ea4bff8ca
+alac_get ALACDecoder.cpp b071c3a82bcb0b5e8ad704cafb514aaeba5b0869b7dcc83fa79561bae994c019
+alac_get ALACDecoder.h 779a1686417687f3ba107f9a12bb0f4c892885c0654d0bd5db7133bc4edfe24c
+alac_get EndianPortable.c 34b4d4c4dd599e05ac43f4a58eef61ef2eb5a7093e46209eebdf6ac7024b3dfc
+alac_get EndianPortable.h 5c3b1df02e8bef3adb4feee6f0ed0684b2d000d44e57a0c2ed754668794d40b0
+alac_get ag_dec.c 622d7551ef041d82fa6462292155c48fcc2d8b912ed0241e202b86afa3536747
+alac_get aglib.h ef715d64666e4a4faaa0fafcd5050bd5b7f8c45e9760382735f37cf183c55778
+alac_get dp_dec.c 1f8e8b25e61c5b667ad729a9c33e3916df7eb4883125dcac7266d719cbf23516
+alac_get dplib.h fd2b9806f8cf2386dcbdc919ddf56c18608ce1b0812a74b6b9d0b0eb9df67d78
+alac_get matrix_dec.c ae9dd8abc1a9d1cf7f6256c0b15ffd72f9d51c6ffdae9b833f6e96d9d8a03495
+alac_get matrixlib.h 00839b4672b4ae7887a4d0448d6258165753b1e5f85f84c53c67e7e7b8b9d76d
 
 # ---------------------------------------------------------------- rekordbox's library key
 keyfile="${RBSP_LIBRARY_KEY_FILE:-}"
@@ -134,5 +156,9 @@ cc -Dmodel_load_ort=cuda_model_load_ort -Dmodel_open=cuda_model_open -Dmodel_clo
 cc -ffp-contract=off -c "$hs/resample.c" -o "$obj/resample.o"          # rekordbox's fused multiply-adds only where it has them
 for f in mp3 mp4 manifest entry; do cc -c "$hs/$f.c" -o "$obj/$f.o"; done
 for f in decode_win kept_win library_win big_win readable_win glue_win cuda_win; do cc -c "$here/$f.c" -o "$obj/$f.o"; done
-"$CC" "$obj"/*.o "$flac/lib/libFLAC.a" -static-libgcc -lmfplat -lmfreadwrite -lmfuuid -lole32 -lshell32 -ladvapi32 -luuid -o "$out/rbsp-prepare.exe"
+# Apple's ALAC decoder: its own warnings aren't ours (multi-character constants, old C++)
+for f in ALACBitUtilities EndianPortable ag_dec dp_dec matrix_dec; do "$CC" -O2 -w -I"$alac" -c "$alac/$f.c" -o "$obj/alac_$f.o"; done
+"$CXX" -O2 -w -I"$alac" -c "$alac/ALACDecoder.cpp" -o "$obj/alac_ALACDecoder.o"
+"$CXX" -O2 -Wall -Wextra -Wno-multichar -I"$alac" -c "$here/alac_win.cpp" -o "$obj/alac_win.o"
+"$CXX" "$obj"/*.o "$flac/lib/libFLAC.a" -static-libgcc -static-libstdc++ -lmfplat -lmfreadwrite -lmfuuid -lole32 -lshell32 -ladvapi32 -luuid -o "$out/rbsp-prepare.exe"
 echo "built $out/rbsp-prepare.exe"

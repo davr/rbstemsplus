@@ -101,6 +101,17 @@ expect 'grep -q "\"result\":\"ready\",\"entries\":2" <<< "$est2"' "estimate afte
 run3="$(prep "${common[@]}" --cache "$(P "$cache")" --kept-dir "$(P "$kdir")" --no-keep "$aif")"
 expect 'grep -q "\"written\":0,\"already\":2" <<< "$run3"' "the AIFF gives the WAV's entries: $run3"
 
+# ALAC (Apple's decoder) and FLAC (libFLAC) are lossless: the same samples, so the same entries
+if command -v ffmpeg > /dev/null; then
+  ffmpeg -v error -y -i "$scratch/audio/a.wav" -c:a alac "$scratch/audio/a.m4a" && ffmpeg -v error -y -i "$scratch/audio/a.wav" -c:a flac "$scratch/audio/a.flac"
+  for f in m4a flac; do
+    out="$(prep "${common[@]}" --cache "$(P "$cache")" --kept-dir "$(P "$kdir")" --no-keep "$(P "$scratch/audio/a.$f")")"
+    expect 'grep -q "\"written\":0,\"already\":2" <<< "$out"' "$f (lossless) gives the WAV's entries: $out"
+  done
+  est3="$(prep --estimate "${common[@]}" --cache "$(P "$cache")" --kept-dir "$(P "$kdir")" "$(P "$scratch/audio/a.m4a")")"
+  expect 'grep -q "\"result\":\"prepare\",\"seconds\":11.0" <<< "$est3" || grep -q "\"result\":\"ready\"" <<< "$est3"' "estimate reads an M4A's length: $est3"
+else skip "ALAC and FLAC tests (no ffmpeg)"; fi
+
 # ---------------------------------------------------------------- the CUDA path falls back to the CPU
 # a "CUDA ONNX Runtime" that has no CUDA (Microsoft's CPU build): the session fails, the CPU runs, entries are written
 c5="$scratch/c5"; k5="$scratch/k5"; mkdir -p "$c5" "$k5"

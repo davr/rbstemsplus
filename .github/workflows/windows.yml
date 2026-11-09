@@ -22,7 +22,7 @@ jobs:
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update -qq
-          sudo apt-get install -y -qq mingw-w64 wine64 wine xz-utils unzip > /dev/null
+          sudo apt-get install -y -qq mingw-w64 wine64 wine xz-utils unzip ffmpeg > /dev/null
       - uses: actions/setup-dotnet@v4
         with: { dotnet-version: "8.0.x" }
       - name: "the bridge's tests (wine)"
@@ -57,7 +57,7 @@ jobs:
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
-          install: mingw-w64-x86_64-gcc make python unzip curl tar xz
+          install: mingw-w64-x86_64-gcc make python unzip curl tar xz mingw-w64-x86_64-ffmpeg
       - name: "the bridge's tests (native, the ACL check included)"
         shell: msys2 {0}
         run: bridge/win/tests/run.sh

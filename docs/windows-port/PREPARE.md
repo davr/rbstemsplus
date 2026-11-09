@@ -52,14 +52,21 @@ Running log; newest last. Build: `make helper-win` (`helper/win/build.sh`); test
 - **Windows versions**: `decode_win.c` (probe and decode), `kept_win.c` (kept.c with its clang blocks as a callback and
   `%APPDATA%\rbstemsplus\kept`), `library_win.c` (library.c over rekordbox's own `sqlite3.dll`: no SQLCipher in our
   binary), `big_win.c`, `readable_win.c`, `glue_win.c`.
-- **Works (tested under wine, `helper/win/tests/run.sh`, 22 checks)**: usage and refusals; `--estimate`; a run with a
-  tiny model through Microsoft's ONNX Runtime: entries written under the **same keys an independent Python
-  implementation of rekordbox's chunking computes** (WAV, and AIFF decodes to the same entries), kept set, manifest,
-  "unchanged since it was prepared" on a second run, estimate "ready" afterwards; the app's **stop** event
-  (`Local\rbsp-prepare-<pid>-stop`: finishes the chunk, writes the set, final line, exit 0), **pause** event (blocks
-  before the next model run until reset; stop still gets through a pause).
-- **Written, not testable here**: FLAC and MP3 decode (MP3 needs rekordbox's `libmpg123.dll`; FLAC decode compiles and
-  is the libFLAC stream decoder), AAC through Media Foundation (wine has no AAC decoder), the library reader (needs
-  rekordbox's `sqlite3.dll` and the key), `--playlists` / `--tracks`.
-- **Not done**: ALAC (reported as skipped, "not supported on Windows yet"), the CUDA path, other sample rates (skipped,
-  by decision), a test of the library reader against a plain SQLite build, a wine test of FLAC.
+- **Works (tested under wine, `helper/win/tests/run.sh`, 31 checks)**: usage and refusals; `--playlists` and `--tracks`
+  against a plain SQLite build of rekordbox's tables (order, folders first, deleted rows, duplicates, streaming tracks,
+  UTF-8 paths); `--estimate`; a run with a tiny model through Microsoft's ONNX Runtime: entries written under the
+  **same keys an independent Python implementation of rekordbox's chunking computes** (WAV; AIFF, **FLAC and ALAC**
+  decode to the same entries, bit for bit), kept set, manifest, "unchanged since it was prepared" on a second run,
+  estimate "ready" afterwards; the app's **stop** event (`Local\rbsp-prepare-<pid>-stop`: finishes the chunk, writes the
+  set, final line, exit 0), **pause** event (blocks before the next model run until reset; stop still gets through a
+  pause); the **CUDA path's fallback** (`%ProgramData%\rbstemsplus\ort-cuda` that can't start: the CPU takes over).
+- **ALAC**: Apple's open-source decoder (Apache 2.0, `macosforge/alac` `codec/`, fetched at build time and sha256-pinned,
+  in NOTICE), 16/24/32-bit, mono or stereo, 44.1 kHz.
+- **CUDA (`cuda_win.c`)**: our model on `ort-cuda`'s ONNX Runtime with the bridge's provider options (device 0, heuristic
+  cuDNN search, arena `kSameAsRequested`, 5 GiB cap), the folder's DLLs preloaded as the bridge does; any failure at load,
+  session or run falls back to the CPU session (a note on stderr: `rbsp-prepare: CUDA: ...`). `RBSP_NO_CUDA=1` turns it off.
+  The CUDA success path itself is **untestable here** (no GPU); it is the bridge's code path reused.
+- **Written, not testable here**: MP3 decode (needs rekordbox's `libmpg123.dll`), AAC through Media Foundation (wine has no
+  AAC decoder), the real SQLCipher key (the test `sqlite3.dll` accepts any key).
+- **Not done**: other sample rates (skipped, by decision), the app's updater only swaps `RBStemsPlus.exe`, so a helper
+  update needs `windows/RBStemsPlus/Updater.cs` to copy `rbsp-prepare.exe` too (the install command copies the whole zip).

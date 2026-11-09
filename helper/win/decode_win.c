@@ -454,6 +454,9 @@ done:
     return rc;
 }
 
+/* alac_win.cpp: planar stereo float32, malloc'd (big_free is free here) */
+int alac_decode(FILE *f, float **out, size_t *n_out, int *rate, int *ch, char *why, size_t whyn);
+
 static size_t scat(char *d, const char *s, size_t n) { size_t l = strlen(d); snprintf(d + l, n - l, "%s", s); return strlen(d); }
 
 /* the files load_tracks refuses before decoding, and why: 0, or 1 and why */
@@ -469,7 +472,7 @@ static int refused(const char *path, char *ext, size_t extn, probe_info *p, char
     int bad = !strcmp(ext, ".mp3") ? probe_mp3(path, p) : !strcmp(ext, ".wav") ? probe_wav(path, p)
               : !strcmp(ext, ".flac") ? probe_flac(path, p) : (!strcmp(ext, ".aif") || !strcmp(ext, ".aiff")) ? probe_aiff(path, p) : probe_mp4(path, p);
     if (bad) { snprintf(why, whyn, "no audio stream Windows can read"); return 1; }
-    if (p->kind == K_ALAC) { snprintf(why, whyn, "ALAC: not supported on Windows yet"); return 1; }
+    if (p->kind == K_ALAC && p->ch > 2) { snprintf(why, whyn, "ALAC with %d channels: not supported on Windows yet", p->ch); return 1; }
     if (p->kind == K_AAC && p->ch > 2) { snprintf(why, whyn, "AAC with %d channels: rekordbox loads it but doesn't separate it", p->ch); return 1; }
     if (p->rate != 44100) { snprintf(why, whyn, "%d Hz: not supported on Windows yet", p->rate); return 1; }
     return 0;
@@ -517,6 +520,17 @@ int load_tracks(const char *path, const char *rekordbox_app, tracks *ts, char *w
         ts->t[0] = (track){NULL, pcm, ch, 1, n};
         ts->count = 1;
         snprintf(ts->how, sizeof ts->how, "Media Foundation, 16-bit, length %zu", n);
+    } else if (p.kind == K_ALAC) {
+        float *s = NULL;
+        size_t n = 0;
+        int rate = 0, ch = 0;
+        FILE *f = fopen(path, "rb");
+        int bad = !f || alac_decode(f, &s, &n, &rate, &ch, why, whyn);
+        if (f) fclose(f);
+        if (bad) { if (!f) snprintf(why, whyn, "the file can't be opened"); return 1; }
+        if (rate != 44100) { free(s); snprintf(why, whyn, "%d Hz: not supported on Windows yet", rate); return 1; }
+        add_track(ts, s, n);
+        snprintf(ts->how, sizeof ts->how, "alac %d Hz (Apple's open-source decoder)", rate);
     } else {
         float *s;
         size_t n;
