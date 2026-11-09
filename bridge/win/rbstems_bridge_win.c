@@ -106,7 +106,8 @@ static int rekordbox_model = 0;         /* this account caches rekordbox's own (
  * entry saved meanwhile. A test build takes RBSTEMS_TEST_NEAR_HITS as the default. */
 static int near_on = 0;                /* config.ini near_hits */
 static int gpu_on = 1;                  /* config.ini gpu: rekordbox's own Demucs model runs on the GPU (DirectML), on by default */
-static int gpu_v4_on = 0;               /* config.ini gpu_v4: our Demucs v4 model too (experimental: it exhausts an 8 GB GPU), off by default */
+static int cuda_on = 1;                 /* config.ini cuda: our Demucs v4 model on an NVIDIA GPU through a CUDA ONNX Runtime (ort-cuda folder), if one is installed */
+static int gpu_v4_on = 0;              /* config.ini gpu_v4: our Demucs v4 model too (experimental: it exhausts an 8 GB GPU), off by default */
 static long long max_bytes = 20LL << 30;
 static double max_days = 60;
 static long long total_bytes = -1;      /* -1: not counted yet */
@@ -209,7 +210,7 @@ static int yes_no(const char *v) {
 #define CONFIG_LINE_MAX 1024
 
 typedef struct {
-    int enabled, rekordbox_model, near_hits, gpu, gpu_v4;
+    int enabled, rekordbox_model, near_hits, gpu, gpu_v4, cuda;
     long long max_bytes;
     double max_days;
     int location;                       /* 0: this Mac; 1: a chosen location; -1: one is set, wrongly */
@@ -329,9 +330,9 @@ static int parse_config(const char *b, size_t n, config *c) {
         } else if (!strcmp(key, "cache_id")) {
             if (!uuid_ok(val) || (have_id && strcasecmp(c->id, val))) bad = 1;
             else { memcpy(c->id, val, 37); have_id = 1; }
-        } else if (!strcmp(key, "enabled") || !strcmp(key, "rekordbox_model") || !strcmp(key, "near_hits") || !strcmp(key, "gpu") || !strcmp(key, "gpu_v4")) {
+        } else if (!strcmp(key, "enabled") || !strcmp(key, "rekordbox_model") || !strcmp(key, "near_hits") || !strcmp(key, "gpu") || !strcmp(key, "gpu_v4") || !strcmp(key, "cuda")) {
             int yn = yes_no(val), *dst = !strcmp(key, "enabled") ? &c->enabled : !strcmp(key, "near_hits") ? &c->near_hits : !strcmp(key, "gpu") ? &c->gpu
-                                       : !strcmp(key, "gpu_v4") ? &c->gpu_v4 : &c->rekordbox_model;
+                                       : !strcmp(key, "gpu_v4") ? &c->gpu_v4 : !strcmp(key, "cuda") ? &c->cuda : &c->rekordbox_model;
             if (yn >= 0) *dst = yn;
             else logf_("config: ignored %s=%.40s (allowed 1 or 0)", key, val);
         } else if (!strcmp(key, "max_gb") || !strcmp(key, "max_days")) {
@@ -928,7 +929,7 @@ static void set_paths(void) {
  * wrongly: never this PC instead). Then the folders: the default one, which keeps the model-hash
  * memos in either case; a chosen location is never created by the bridge. */
 static void set_location(void) {
-    config c = {.enabled = 1, .rekordbox_model = 0, .near_hits = 0, .gpu = 1, .gpu_v4 = 0, .max_bytes = 20LL << 30, .max_days = 60};
+    config c = {.enabled = 1, .rekordbox_model = 0, .near_hits = 0, .gpu = 1, .gpu_v4 = 0, .cuda = 1, .max_bytes = 20LL << 30, .max_days = 60};
 #ifdef RBSTEMS_TEST_REAL_PATH
     if (getenv("RBSTEMS_TEST_NEAR_HITS")) c.near_hits = atoi(getenv("RBSTEMS_TEST_NEAR_HITS")) != 0;
 #endif
@@ -938,6 +939,7 @@ static void set_location(void) {
     near_on = c.near_hits;
     gpu_on = c.gpu;
     gpu_v4_on = c.gpu_v4;
+    cuda_on = c.cuda;
     max_bytes = c.max_bytes;
     max_days = c.max_days;
     if (!memo_dir[0]) return;                               /* no home for the cache: nothing cached */
@@ -1017,6 +1019,7 @@ static struct {
     OrtSession *twin;
     char fp[65]; int refs;                                  /* gpu: the model's checksum; sessions sharing this one */
     rb_mutex run_lock;                                      /* gpu: one run at a time (DirectML's thread-safety isn't verified) */
+    int use_cuda;                                           /* runs go to the shared CUDA session first; s itself is the CPU fallback */
 } sessions[MAX_SESSIONS];
 
 static const char *demucs_model(OrtSession *s, int *rebuild) {
@@ -2399,6 +2402,7 @@ static int is_ours(const char *fp) {
  * needs the memory pattern off and sequential execution. Anything that fails falls back to the CPU. */
 static int dml_adapter = -1;            /* chosen once: the DXGI adapter index, -1 not chosen yet, -2 none */
 static char dml_adapter_name[160];
+static int have_nvidia;                 /* a hardware DXGI adapter from NVIDIA (vendor 0x10DE) was seen */
 
 typedef struct { void *vtbl; } rb_com;   /* IDXGIFactory1 / IDXGIAdapter1, called through their vtables */
 typedef struct {
@@ -2431,6 +2435,7 @@ static void pick_adapter(void) {
             if (rb_utf8(d.Description, -1, name, sizeof name)) snprintf(name, sizeof name, "adapter %u", i);
             int software = (d.Flags & 2) != 0;      /* DXGI_ADAPTER_FLAG_SOFTWARE (Microsoft Basic Render Driver) */
             logf_("GPU: adapter %u: %s, %.1f GB of video memory%s", i, name, d.DedicatedVideoMemory / 1073741824.0, software ? " (software)" : "");
+            if (!software && d.VendorId == 0x10DE) have_nvidia = 1;
             if (!software && (dml_adapter < 0 || d.DedicatedVideoMemory > best)) {
                 dml_adapter = (int)i;
                 best = d.DedicatedVideoMemory;
@@ -2474,17 +2479,192 @@ static int cpu_threads(void) {
     return n < 1 ? 1 : n > 12 ? 12 : (int)n;
 }
 
+/* ---------------------------------------------------------------- the GPU (CUDA)
+ *
+ * DirectML allocates every intermediate tensor of the graph up front (31.9 GB for Demucs v4: it
+ * never finishes on an 8 GB card, GPU-BENCH.md). CUDA's allocator reuses buffers, so the model
+ * needs a few GB. Pioneer's ONNX Runtime has no CUDA, so a second, CUDA-enabled ONNX Runtime 1.18
+ * (the installer puts it in %ProgramData%\rbstemsplus\ort-cuda, administrators-only like ort) is
+ * loaded next to it, for our model only. Its session is a different library's object: rekordbox
+ * keeps getting a CPU session of Pioneer's library (s), and each Run copies the inputs across,
+ * runs the CUDA session and copies the outputs back. A CUDA failure or a missed deadline turns
+ * the CUDA session off and the run goes to s (the CPU, our thread count): rekordbox never waits for it. */
+static HMODULE cuda_handle;
+static const OrtApi *CR;                /* the CUDA library's own OrtApi */
+static OrtEnv *cuda_env;
+static int cuda_state;                  /* 0 not tried, 1 loaded, -1 not available */
+static rb_mutex cuda_lock = RB_MUTEX_INIT;      /* init and the shared session */
+static rb_mutex cuda_run_lock = RB_MUTEX_INIT;  /* one CUDA run at a time */
+static OrtSession *cuda_sess;           /* the shared session: rekordbox opens the model twice */
+static char cuda_fp[65];
+static int cuda_refs;
+
+static int cuda_init(void) {                            /* cuda_lock held */
+    if (cuda_state) return cuda_state > 0;
+    cuda_state = -1;
+    if (!hooks_ok) return 0;
+    pick_adapter();
+    if (!have_nvidia) { logf_("CUDA: no NVIDIA GPU: Demucs v4 stays on the CPU"); return 0; }
+    char path[RB_PATH_MAX] = "";
+#ifdef RBSTEMS_TEST_REAL_PATH
+    if (getenv("RBSTEMS_TEST_CUDA_PATH")) pathf(path, sizeof path, "%s", getenv("RBSTEMS_TEST_CUDA_PATH"));
+#else
+    {
+        PWSTR w = NULL;
+        char pd[RB_PATH_MAX];
+        if (SHGetKnownFolderPath(&FOLDERID_ProgramData, KF_FLAG_DONT_VERIFY, NULL, &w) == S_OK && !rb_utf8(w, -1, pd, sizeof pd))
+            pathf(path, sizeof path, "%s\\rbstemsplus\\ort-cuda\\onnxruntime.dll", pd);
+        CoTaskMemFree(w);
+    }
+#endif
+    wchar_t *wp = path[0] ? rb_wide(path) : NULL;
+    int there = wp && GetFileAttributesW(wp) != INVALID_FILE_ATTRIBUTES;
+    free(wp);
+    if (!there) { logf_("CUDA: no CUDA ONNX Runtime installed (%s): Demucs v4 stays on the CPU", path[0] ? path : "no path"); return 0; }
+    HMODULE h = open_real(path);                        /* the same checks as the real library: administrators-only */
+    if (!h) return 0;
+    const OrtApiBase *(ORT_API_CALL *get)(void) = (const OrtApiBase *(ORT_API_CALL *)(void))(void *)GetProcAddress(h, "OrtGetApiBase");
+    const OrtApiBase *base = get ? get() : NULL;
+    const char *ver = base ? base->GetVersionString() : "";
+    if (!base || strncmp(ver, "1.18.", 5)) { logf_("CUDA: %s is ONNX Runtime %s, not 1.18.x: not used", path, ver); FreeLibrary(h); return 0; }
+    const OrtApi *api = base->GetApi(ORT_API_VERSION);
+    OrtEnv *env = NULL;
+    OrtStatus *st = api ? api->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "rbstems-cuda", &env) : NULL;
+    if (!api || st) {
+        logf_("CUDA: cannot start %s: %s", path, st ? api->GetErrorMessage(st) : "no OrtApi");
+        if (st) api->ReleaseStatus(st);
+        FreeLibrary(h);
+        return 0;
+    }
+    cuda_handle = h; CR = api; cuda_env = env;
+    cuda_state = 1;
+    logf_("CUDA: ONNX Runtime %s loaded from %s", ver, path);
+    return 1;
+}
+
+/* the shared CUDA session of our model, opened on first use; NULL (with a log line) when it can't be */
+static int cuda_acquire(const wchar_t *model_path, const char *fp) {
+    int ok = 0;
+    rb_lock(&cuda_lock);
+    if (cuda_sess && !strcmp(cuda_fp, fp)) { cuda_refs++; ok = 1; }
+    else if (!cuda_sess && cuda_init()) {
+        OrtSessionOptions *o = NULL;
+        OrtCUDAProviderOptionsV2 *p = NULL;
+        OrtSession *sess = NULL;
+        OrtStatus *st = CR->CreateSessionOptions(&o);
+        if (!st) st = CR->CreateCUDAProviderOptions(&p);
+        if (!st) {
+            const char *keys[] = {"device_id", "cudnn_conv_algo_search"}, *vals[] = {"0", "HEURISTIC"};   /* DXGI's order isn't CUDA's: the first NVIDIA GPU */
+            st = CR->UpdateCUDAProviderOptions(p, keys, vals, 2);
+        }
+        if (!st) st = CR->SessionOptionsAppendExecutionProvider_CUDA_V2(o, p);
+        if (!st) st = CR->SetSessionGraphOptimizationLevel(o, ORT_ENABLE_ALL);
+        if (!st) st = CR->CreateSession(cuda_env, model_path, o, &sess);
+        if (st) { logf_("CUDA: the session for model %.12s failed (%s): it runs on the CPU", fp, CR->GetErrorMessage(st)); CR->ReleaseStatus(st); }
+        else { cuda_sess = sess; memcpy(cuda_fp, fp, 65); cuda_refs = 1; ok = 1; logf_("CUDA: session opened for model %.12s", fp); }
+        if (p) CR->ReleaseCUDAProviderOptions(p);
+        if (o) CR->ReleaseSessionOptions(o);
+    }
+    rb_unlock(&cuda_lock);
+    return ok;
+}
+
+static void cuda_release(void) {
+    OrtSession *s = NULL;
+    rb_lock(&cuda_lock);
+    if (cuda_sess && --cuda_refs <= 0) { s = cuda_sess; cuda_sess = NULL; cuda_refs = 0; }
+    rb_unlock(&cuda_lock);
+    if (s) { rb_lock(&cuda_run_lock); CR->ReleaseSession(s); rb_unlock(&cuda_run_lock); }
+}
+
+typedef struct { OrtRunOptions *ro; int done; int refs; const OrtApi *api; } watch;   /* also used by the GPU watchdog below */
+static void watch_unref(watch *w);
+static void watch_fire(void *ctx);
+static double gpu_deadline(size_t samples);
+static OrtValue *new_tensor(const int64_t *dims, size_t ndim);
+
+/* one run on the CUDA session; 0 when the outputs are filled. Float tensors only (our model's). On
+ * failure nothing of the outputs is left behind and why[] says what went wrong. */
+static int cuda_run(const char *const *in_names, const OrtValue *const *inputs, size_t n_in, const char *const *out_names, size_t n_out,
+                    OrtValue **outputs, size_t samples, double *took, char *why, size_t whyn) {
+    enum { MAXIO = 8 };
+    OrtValue *cin[MAXIO] = {0}, *cout[MAXIO] = {0};
+    int created[MAXIO] = {0};
+    OrtMemoryInfo *mi = NULL;
+    watch *w = NULL;
+    int rc = -1;
+    OrtStatus *st = NULL;
+    if (n_in > MAXIO || n_out > MAXIO) { snprintf(why, whyn, "too many tensors"); return -1; }
+    rb_lock(&cuda_lock);
+    OrtSession *cs = cuda_sess;
+    rb_unlock(&cuda_lock);
+    if (!cs) { snprintf(why, whyn, "no CUDA session"); return -1; }
+    rb_lock(&cuda_run_lock);
+    if ((st = CR->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi))) goto fail;
+    for (size_t k = 0; k < n_in; k++) {
+        tensor t;
+        if (view(inputs[k], &t)) { snprintf(why, whyn, "input %zu isn't a float tensor", k); goto done; }
+        if ((st = CR->CreateTensorWithDataAsOrtValue(mi, t.data, t.count * sizeof(float), t.dims, t.ndim, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &cin[k]))) goto fail;
+    }
+    w = calloc(1, sizeof *w);
+    if (!w || !watchdog || CR->CreateRunOptions(&w->ro)) { free(w); w = NULL; }
+    double deadline = gpu_deadline(samples);
+    if (w) { w->api = CR; w->refs = 2; if (rb_after(watchdog, deadline, watch_fire, w)) w->refs = 1; }
+    double t0 = rb_mono_seconds();
+    st = CR->Run(cs, w ? w->ro : NULL, in_names, (const OrtValue *const *)cin, n_in, out_names, n_out, cout);
+    *took = rb_mono_seconds() - t0;
+    if (w) { rb_lock(&lock); w->done = 1; rb_unlock(&lock); watch_unref(w); w = NULL; }
+    if (st) goto fail;
+    for (size_t k = 0; k < n_out; k++) {
+        OrtTensorTypeAndShapeInfo *info = NULL;
+        ONNXTensorElementDataType type;
+        int64_t dims[8];
+        size_t nd = 0, count = 0;
+        void *src = NULL;
+        if ((st = CR->GetTensorTypeAndShape(cout[k], &info))) goto fail;
+        OrtStatus *s2 = CR->GetTensorElementType(info, &type);
+        if (!s2) s2 = CR->GetDimensionsCount(info, &nd);
+        if (!s2 && nd <= 8) s2 = CR->GetDimensions(info, dims, nd);
+        if (!s2) s2 = CR->GetTensorShapeElementCount(info, &count);
+        CR->ReleaseTensorTypeAndShapeInfo(info);
+        if (s2) { st = s2; goto fail; }
+        if (type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT || nd > 8) { snprintf(why, whyn, "output %zu isn't a float tensor", k); goto done; }
+        if ((st = CR->GetTensorMutableData(cout[k], &src))) goto fail;
+        tensor d;
+        if (outputs[k]) {                                       /* rekordbox gave one: it must be the same size */
+            if (view(outputs[k], &d) || d.count != count) { snprintf(why, whyn, "output %zu doesn't match", k); goto done; }
+        } else {
+            if (!(outputs[k] = new_tensor(dims, nd)) || view(outputs[k], &d)) { snprintf(why, whyn, "cannot allocate output %zu", k); goto done; }
+            created[k] = 1;
+        }
+        memcpy(d.data, src, count * sizeof(float));
+    }
+    rc = 0;
+    goto done;
+fail:
+    snprintf(why, whyn, "%s", st ? CR->GetErrorMessage(st) : "failed");
+    if (st) CR->ReleaseStatus(st);
+done:
+    if (w) { rb_lock(&lock); w->done = 1; rb_unlock(&lock); watch_unref(w); }
+    if (rc) for (size_t k = 0; k < n_out; k++) if (created[k]) { R->ReleaseValue(outputs[k]); outputs[k] = NULL; }
+    for (size_t k = 0; k < MAXIO; k++) { if (cin[k]) CR->ReleaseValue(cin[k]); if (cout[k]) CR->ReleaseValue(cout[k]); }
+    if (mi) CR->ReleaseMemoryInfo(mi);
+    rb_unlock(&cuda_run_lock);
+    return rc;
+}
+
 /* A Demucs session: a copy of rekordbox's options with DirectML added (gpu=1) and, for our model,
  * the memory pattern off (measured: 2.26 GB peak with it, 1.75 GB without, same speed). If the
  * GPU session can't be made, the same without DirectML; if anything about the copy fails,
  * rekordbox's options unchanged. *how says which; *gpu whether it runs on the GPU. */
 static OrtStatus *create_demucs(const OrtEnv *env, const ORTCHAR_T *path, const OrtSessionOptions *options,
-                                OrtSession **out, const char *fp, const char **how, int *gpu) {
+                                OrtSession **out, const char *fp, const char **how, int *gpu, int no_dml) {
     static char howbuf[300];
     *how = "rekordbox's session options";
     *gpu = 0;
     int ours = is_ours(fp);
     int want_gpu = ours ? gpu_on && gpu_v4_on : gpu_on;     /* ours: only with gpu_v4=1 */
+    if (no_dml) want_gpu = 0;                               /* the CUDA session takes the GPU; this one is its CPU fallback */
     if (!options || (!ours && !want_gpu)) return R->CreateSession(env, path, options, out);
     for (int attempt = want_gpu ? 0 : 1; attempt < 2; attempt++) {
         OrtSessionOptions *o = NULL;
@@ -2608,7 +2788,10 @@ static OrtStatus *ORT_API_CALL hook_CreateSession(const OrtEnv *env, const ORTCH
         }
     rb_unlock(&lock);
     int on_gpu = 0;
-    OrtStatus *st = create_demucs(env, model_path, options, out, fp, &how, &on_gpu);
+    /* our model on an NVIDIA GPU: a CUDA session (shared), with this session as its CPU fallback */
+    int cuda_ok = is_ours(fp) && cuda_on && gpu_on && cuda_acquire(model_path, fp);
+    OrtStatus *st = create_demucs(env, model_path, options, out, fp, &how, &on_gpu, cuda_ok);
+    if (st && cuda_ok) { cuda_release(); cuda_ok = 0; }
     int cached = !st && enabled && base_dir[0];            /* a chosen location may come back later */
 #ifdef RBSTEMS_TEST_REAL_PATH
     if (!st && options && getenv("RBSTEMS_TEST_GPU_AS_CPU") && is_ours(fp) && gpu_v4_on) on_gpu = 1;   /* a stand-in for the GPU */
@@ -2619,11 +2802,11 @@ static OrtStatus *ORT_API_CALL hook_CreateSession(const OrtEnv *env, const ORTCH
     if (rebuild) rebuilt_id(fp, id);
     else memcpy(id, fp, 65);
     if (!st) logf_("Demucs session opened: model %.12s, %s%s%s%s", fp, how,
-                   on_gpu ? "" : had_dml(options) ? ", on the GPU (rekordbox's DirectML)"
+                   cuda_ok ? ", on the GPU (CUDA; this CPU session is the fallback)" : on_gpu ? "" : had_dml(options) ? ", on the GPU (rekordbox's DirectML)"
                    : !gpu_on ? ", on the CPU (gpu=0 in config.ini)" : is_ours(fp) && !gpu_v4_on ? ", on the CPU (gpu_v4=0: Demucs v4 on the GPU is experimental)" : ", on the CPU",
                    cached ? "" : ", not cached",
                    !cached || !pioneer ? "" : rebuild ? ", rekordbox's own: stems rebuilt" : ", rekordbox's own: not cached here (rekordbox_model=0)");
-    if (st || (!cached && !on_gpu)) return st;
+    if (st || (!cached && !on_gpu && !cuda_ok)) return st;
     /* a GPU session is watched: what a CPU twin is made from (rekordbox's options, as they were) is kept */
     OrtSessionOptions *copts = NULL;
     if (on_gpu && options && !R->CloneSessionOptions(options, &copts) && is_ours(fp)) { R->DisableMemPattern(copts); R->SetIntraOpNumThreads(copts, cpu_threads()); }
@@ -2638,12 +2821,13 @@ static OrtStatus *ORT_API_CALL hook_CreateSession(const OrtEnv *env, const ORTCH
             sessions[i].gpu = on_gpu && copts && wpath;
             memcpy(sessions[i].fp, fp, 65);
             sessions[i].refs = 1;
+            sessions[i].use_cuda = cuda_ok;
             sessions[i].env = env; sessions[i].path = wpath; sessions[i].copts = copts;
             stored = 1;
             break;
         }
     rb_unlock(&lock);
-    if (!stored) { if (copts) R->ReleaseSessionOptions(copts); free(wpath); }
+    if (!stored) { if (copts) R->ReleaseSessionOptions(copts); free(wpath); if (cuda_ok) cuda_release(); }
     if (!cached) return st;
     /* off rekordbox's threads, after a chosen location's check: this model's summaries, then
      * (once per load) the limits; a location that comes back later is counted by recheck */
@@ -2664,15 +2848,17 @@ static void ORT_API_CALL hook_ReleaseSession(OrtSession *s) {
     OrtSession *twin = NULL;
     OrtSessionOptions *copts = NULL;
     wchar_t *wpath = NULL;
+    int cuda = 0;
     rb_lock(&lock);
     for (int i = 0; i < MAX_SESSIONS; i++)
         if (sessions[i].s == s && sessions[i].refs > 1) { sessions[i].refs--; rb_unlock(&lock); return; }   /* still shared */
     for (int i = 0; i < MAX_SESSIONS; i++)
         if (sessions[i].s == s) {
-            twin = sessions[i].twin; copts = sessions[i].copts; wpath = sessions[i].path;
+            twin = sessions[i].twin; copts = sessions[i].copts; wpath = sessions[i].path; cuda = sessions[i].use_cuda;
             memset(&sessions[i], 0, sizeof sessions[i]);
         }
     rb_unlock(&lock);
+    if (cuda) cuda_release();
     if (twin) R->ReleaseSession(twin);
     if (copts) R->ReleaseSessionOptions(copts);
     free(wpath);
@@ -2871,21 +3057,20 @@ static struct { double hook, model, between; int n, nb; } run_stats;
  * can take minutes per chunk) would leave rekordbox stuck. So a GPU session's Run gets a
  * deadline: past it the run is terminated and answered by a CPU twin of the session, and every
  * later run of that session goes to the twin. */
-typedef struct { OrtRunOptions *ro; int done; int refs; } watch;
 static rb_mutex twin_lock = RB_MUTEX_INIT;
 
 static void watch_unref(watch *w) {
     rb_lock(&lock);
     int last = --w->refs == 0;
     rb_unlock(&lock);
-    if (last) { R->ReleaseRunOptions(w->ro); free(w); }
+    if (last) { w->api->ReleaseRunOptions(w->ro); free(w); }
 }
 static void watch_fire(void *ctx) {
     watch *w = ctx;
     rb_lock(&lock);
     int stop = !w->done;
     rb_unlock(&lock);
-    if (stop) R->RunOptionsSetTerminate(w->ro);
+    if (stop) w->api->RunOptionsSetTerminate(w->ro);
     watch_unref(w);
 }
 
@@ -2902,12 +3087,25 @@ static double gpu_deadline(size_t samples) {
  * chunk's length (0 when unknown) */
 static OrtStatus *guarded_run(OrtSession *s, const OrtRunOptions *ro, const char *const *in_names, const OrtValue *const *inputs,
                               size_t n_in, const char *const *out_names, size_t n_out, OrtValue **outputs, size_t samples) {
-    int gpu = 0, gone = 0, i;
+    int gpu = 0, gone = 0, i, cuda = 0;
     OrtSession *twin = NULL;
+    static int cuda_broken, cuda_logged;                    /* a failed CUDA run: every later run is the CPU's */
     rb_lock(&lock);
     for (i = 0; i < MAX_SESSIONS; i++)
-        if (sessions[i].s == s) { gpu = sessions[i].gpu; gone = sessions[i].abandoned; twin = sessions[i].twin; break; }
+        if (sessions[i].s == s) { gpu = sessions[i].gpu; gone = sessions[i].abandoned; twin = sessions[i].twin; cuda = sessions[i].use_cuda && !cuda_broken; break; }
     rb_unlock(&lock);
+    if (cuda) {
+        char why[300] = "";
+        double took = 0;
+        if (cuda_run(in_names, inputs, n_in, out_names, n_out, outputs, samples, &took, why, sizeof why) == 0) {
+            if (cuda_logged < 3) { cuda_logged++; logf_("CUDA run: %.2f s for %zu samples", took, samples); }
+            return NULL;
+        }
+        rb_lock(&lock);
+        cuda_broken = 1;
+        rb_unlock(&lock);
+        logf_("CUDA run failed (%s): this model now runs on the CPU", why);
+    }
     rb_mutex *run_lock = gpu ? &sessions[i].run_lock : NULL;
     if (!gpu) return R->Run(s, ro, in_names, inputs, n_in, out_names, n_out, outputs);
     char msg[300] = "";
@@ -2927,6 +3125,7 @@ static OrtStatus *guarded_run(OrtSession *s, const OrtRunOptions *ro, const char
             return st;
         }
         w->refs = 2;
+        w->api = R;
         double deadline = gpu_deadline(samples);
         if (rb_after(watchdog, deadline, watch_fire, w)) w->refs = 1;
 #ifdef RBSTEMS_TEST_REAL_PATH

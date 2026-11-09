@@ -99,3 +99,9 @@ Compare our model with rekordbox's own. With `rekordbox_model=1` the bridge time
 ## What would help from the user
 - Run `windows-test-3`. Load a track you haven't loaded yet, wait a few chunks, and send `bridge.log`. The lines to look for are "asked for the … execution provider" and "Demucs session opened … on the GPU/CPU".
 - Your GPU model, and whether rekordbox's own model is faster than ours on this PC.
+
+## C, started (2026-11-09): the CUDA path in the bridge (not built or run yet)
+- `bridge/win/rbstems_bridge_win.c`, section "the GPU (CUDA)": for our model only, with an NVIDIA adapter and a CUDA ONNX Runtime 1.18 at `%ProgramData%\rbstemsplus\ort-cuda\onnxruntime.dll` (administrators-only, same checks as `ort`), the bridge opens one shared CUDA session. Rekordbox still gets a normal CPU session of Pioneer's library (the fallback, our thread count); each Run copies the inputs across, runs CUDA, and copies the outputs back into Pioneer's tensors.
+- A CUDA error or a missed deadline turns CUDA off for good: that run and every later one go to the CPU session. `config.ini` `cuda=0` turns it off (default 1; it does nothing without the `ort-cuda` folder). With CUDA, DirectML is not added to our model's session.
+- Still to do: build it in CI (no mingw here), the installer/CI side that puts `ort-cuda` in place, a test stand-in, real-PC runs.
+- **The runtime DLLs are not in the NVIDIA driver.** cuBLAS, cuDNN and the CUDA runtime come with the toolkit or have to ship with the package. ONNX Runtime 1.18 needs CUDA 12 (or 11.8) and cuDNN 9 (8 for 11.8). The test PC has only CUDA 13.4 (`cublas64_13.dll`), which 1.18 can't use. So the download is the ~1.5 to 2 GB estimated above, or the user installs CUDA 12 and cuDNN 9 themselves.

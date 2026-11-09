@@ -21,7 +21,12 @@ from onnxconverter_common import float16
 def to_fp16(m):
     first = next(i for i, n in enumerate(m.graph.node) if n.op_type in ("Conv", "InstanceNormalization", "GroupNormalization"))
     block = [n.name for n in m.graph.node[:first]]
-    print(f"  fp32 nodes (input normalisation): {len(block)} of {len(m.graph.node)}")
+    # The converter rewrites every unblocked Cast(to=float) into Cast(to=float16), so its output stops matching a consumer
+    # that stays fp32 (bench run 2: "/Cast_15_output_0 float16 does not match expected float"). Keep those Casts as they are.
+    casts = [n.name for n in m.graph.node[first:]
+             if n.op_type == "Cast" and any(a.name == "to" and a.i == onnx.TensorProto.FLOAT for a in n.attribute)]
+    block += casts
+    print(f"  fp32 nodes: {len(block) - len(casts)} input normalisation + {len(casts)} Cast-to-float, of {len(m.graph.node)}")
     return float16.convert_float_to_float16(m, keep_io_types=True, node_block_list=block, max_finite_val=65504.0)
 
 
