@@ -81,6 +81,11 @@ public sealed class AppPaths
     // rekordbox's settings and the STEMS model it downloads (the same layout as on macOS)
     public string RbSettingsDir => Path.Combine(Roaming, "Pioneer", "rekordbox6");
     public string ModelDir => Path.Combine(RbSettingsDir, "models", "demucs3_model");
+    /// "Prioritize sound quality" (PartAnalysisQuality 0) or "Prioritize speed" (1): with speed rekordbox
+    /// separates with another engine and no stems are cached. Same file as on the Mac.
+    public string RbSettingsFile => Path.Combine(RbSettingsDir, "rekordbox3.settings");
+    /// rekordbox's library (a SQLCipher database), read only by the prepare helper.
+    public string RbLibraryFile => Path.Combine(Roaming, "Pioneer", "rekordbox", "master.db");
 
     // this account's files
     public string Support => Path.Combine(Roaming, "rbstemsplus");
@@ -89,6 +94,8 @@ public sealed class AppPaths
     public string RequestFile => Path.Combine(Support, "request");
     public string BusyFile => Path.Combine(Support, "busy");
     public string ConfigFile => Path.Combine(Support, "config.ini");
+    /// The kept sets (prepared playlists): <playlist id>.kept (the bridge's) and <playlist id>.manifest (the helper's).
+    public string KeptDir => Path.Combine(Support, "kept");
     public string OriginalsDir => Path.Combine(Support, "originals");
     public string PayloadRoot => Path.Combine(Support, "payload");
     public string ManifestFile => Path.Combine(PayloadRoot, Consts.ManifestName);
