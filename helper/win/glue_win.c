@@ -62,7 +62,30 @@ int model_run(model *m, const float *mix, size_t L, int ours, float **x, float *
     return model_run_inner(m, mix, L, ours, x, xt, F, why, whyn);
 }
 
+/* A crash says so on standard error (the app logs it): the exception's code, where, and in which module. */
+static LONG WINAPI on_crash(EXCEPTION_POINTERS *x) {
+    char line[512], mod[MAX_PATH] = "?";
+    void *at = x && x->ExceptionRecord ? x->ExceptionRecord->ExceptionAddress : NULL;
+    DWORD code = x && x->ExceptionRecord ? x->ExceptionRecord->ExceptionCode : 0;
+    HMODULE h = NULL;
+    uintptr_t off = 0;
+    if (at && GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)at, &h) && h) {
+        char full[MAX_PATH];
+        DWORD n = GetModuleFileNameA(h, full, sizeof full);
+        if (n > 0 && n < sizeof full) {
+            const char *b = strrchr(full, '\\');
+            rb_strlcpy(mod, b ? b + 1 : full, sizeof mod);
+        }
+        off = (uintptr_t)at - (uintptr_t)h;
+    }
+    int n = snprintf(line, sizeof line, "rbsp-prepare: CRASH: exception 0x%08lX at %s+0x%llX\n", (unsigned long)code, mod, (unsigned long long)off);
+    DWORD wrote;
+    if (n > 0) WriteFile(GetStdHandle(STD_ERROR_HANDLE), line, (DWORD)n, &wrote, NULL);
+    return EXCEPTION_EXECUTE_HANDLER;                  /* the process ends with the exception's code */
+}
+
 int main(void) {
+    SetUnhandledExceptionFilter(on_crash);
     int argc = 0;
     wchar_t **w = CommandLineToArgvW(GetCommandLineW(), &argc);
     char **argv = calloc((size_t)argc + 1, sizeof *argv);
