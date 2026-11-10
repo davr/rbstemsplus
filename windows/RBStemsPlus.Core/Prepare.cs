@@ -39,6 +39,29 @@ public sealed class PrepareFacts
 
 public static class Prepare
 {
+    /// rekordbox's library file: options.json's "db-path" ({"options":[["db-path","M:\\x\\master.db"],...]})
+    /// when it names a .db by a full path, else fallback.
+    public static string LibraryPath(string? optionsJson, string fallback)
+    {
+        if (string.IsNullOrWhiteSpace(optionsJson)) return fallback;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(optionsJson);
+            var str = System.Text.Json.JsonValueKind.String;
+            var arr = System.Text.Json.JsonValueKind.Array;
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object || !doc.RootElement.TryGetProperty("options", out var opts) || opts.ValueKind != arr) return fallback;
+            foreach (var o in opts.EnumerateArray())
+            {
+                if (o.ValueKind != arr || o.GetArrayLength() < 2 || o[0].ValueKind != str || o[0].GetString() != "db-path" || o[1].ValueKind != str) continue;
+                var v = o[1].GetString() ?? "";
+                var full = v.Length > 3 && ((char.IsAsciiLetter(v[0]) && v[1] == ':' && (v[2] == '\\' || v[2] == '/')) || v.StartsWith(@"\\"));
+                return full && v.EndsWith(".db", StringComparison.OrdinalIgnoreCase) ? v : fallback;
+            }
+        }
+        catch (System.Text.Json.JsonException) { }
+        return fallback;
+    }
+
     /// What a run of playlist id adds to the helper's arguments. first: "Prepare the First N Tracks".
     public static List<string> RunArgs(string id, string until, int? first)
     {

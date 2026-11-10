@@ -240,6 +240,21 @@ public class PrepareTests
         Assert.DoesNotMatch(pat, "rbsp-prepare.exe --until 99 --keep 421 --playlist 421");
     }
 
+    [Fact] public void LibraryPathComesFromRekordboxsOptions()
+    {
+        const string d = @"C:\Users\x\AppData\Roaming\Pioneer\rekordbox\master.db";
+        Assert.Equal(@"M:\PIONEER\Master\master.db", LibraryPath("""{"options":[["lang","en"],["db-path","M:\\PIONEER\\Master\\master.db"]]}""", d));
+        Assert.Equal(@"\\nas\dj\master.db", LibraryPath("""{"options":[["db-path","\\\\nas\\dj\\master.db"]]}""", d));
+        Assert.Equal(d, LibraryPath(null, d));
+        Assert.Equal(d, LibraryPath("", d));
+        Assert.Equal(d, LibraryPath("not json", d));
+        Assert.Equal(d, LibraryPath("""{"options":[["db-path","master.db"]]}""", d));        // not a full path
+        Assert.Equal(d, LibraryPath("""{"options":[["db-path","M:\\x\\notes.txt"]]}""", d));
+        Assert.Equal(d, LibraryPath("""{"options":[["db-path",5]]}""", d));
+        Assert.Equal(d, LibraryPath("""{"options":{}}""", d));
+        Assert.Equal(d, LibraryPath("[1]", d));
+    }
+
     [Fact] public void Words()
     {
         Assert.Equal("can't read <path>", NoPaths(@"can't read C:\Users\dj\Music\Café ♫.flac"));

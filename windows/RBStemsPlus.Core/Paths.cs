@@ -85,7 +85,10 @@ public sealed class AppPaths
     /// separates with another engine and no stems are cached. Same file as on the Mac.
     public string RbSettingsFile => Path.Combine(RbSettingsDir, "rekordbox3.settings");
     /// rekordbox's library (a SQLCipher database), read only by the prepare helper.
-    public string RbLibraryFile => Path.Combine(Roaming, "Pioneer", "rekordbox", "master.db");
+    /// It is where rekordbox says its database is (rekordboxAgent's options.json, "db-path": the library can
+    /// be kept on another drive), else the default place.
+    public string RbLibraryFile => Prepare.LibraryPath(Files.ReadText(RbOptionsFile), Path.Combine(Roaming, "Pioneer", "rekordbox", "master.db"));
+    public string RbOptionsFile => Path.Combine(Roaming, "Pioneer", "rekordboxAgent", "storage", "options.json");
 
     // this account's files
     public string Support => Path.Combine(Roaming, "rbstemsplus");
