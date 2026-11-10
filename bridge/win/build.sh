@@ -32,7 +32,7 @@ if [ "${1:-}" = "--bench" ]; then
   [ $# -eq 2 ] || { echo "usage: $0 --bench OUT" >&2; exit 2; }
   command -v "$CC" >/dev/null || { echo "bridge/win/build.sh: $CC not found (install mingw-w64)" >&2; exit 1; }
   mkdir -p "$2"
-  "$CC" -O2 -Wall -Wextra -Wno-unused-result -std=gnu11 -I"$here/.." "$here/bench/rbsp-bench.c" -static-libgcc -o "$2/rbsp-bench.exe"
+  "$CC" -O2 -U_FORTIFY_SOURCE -Wall -Wextra -Wno-unused-result -std=gnu11 -I"$here/.." "$here/bench/rbsp-bench.c" -static-libgcc -o "$2/rbsp-bench.exe"
   echo "built $2/rbsp-bench.exe"
   exit 0
 fi
@@ -84,7 +84,7 @@ echo "building libFLAC $FLAC_VERSION for $HOST"
     --enable-static --disable-shared --disable-ogg --disable-programs --disable-examples \
     --disable-cpplibs --disable-doxygen-docs --disable-version-from-git --disable-stack-smash-protection \
     --disable-multithreading \
-    CC="$CC" CFLAGS="-O2"
+    CC="$CC" CFLAGS="-O2 -U_FORTIFY_SOURCE"
   make -s -j"$jobs" -C src/libFLAC
 ) > "$flac_root/build-win.log" 2>&1 || { tail -30 "$flac_root/build-win.log" >&2; exit 1; }
 cp "$src/flac-$FLAC_VERSION/include/FLAC/"*.h "$prefix/include/FLAC/"
@@ -118,7 +118,7 @@ if [ -n "$unit" ]; then
   exit 0
 fi
 # shellcheck disable=SC2086
-"$CC" -shared -O2 -Wall -Wextra -Wno-cast-function-type -Wno-unused-function -std=gnu11 \
+"$CC" -shared -O2 -U_FORTIFY_SOURCE -Wall -Wextra -Wno-cast-function-type -Wno-unused-function -std=gnu11 \
   $defines -I"$here" -I"$here/.." -I"$prefix/include" \
   "$here/rbstems_bridge_win.c" "$here/exports.def" "$prefix/lib/libFLAC.a" \
   -static-libgcc -Wl,--no-insert-timestamp -Wl,--enable-stdcall-fixup \

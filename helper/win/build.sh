@@ -62,7 +62,7 @@ if [ ! -f "$flac/lib/libFLAC.a" ]; then
     cd "$scratch/flac-$FLAC_VERSION"
     ./configure --quiet --host="$HOST" --enable-static --disable-shared --disable-ogg --disable-programs \
       --disable-examples --disable-cpplibs --disable-doxygen-docs --disable-version-from-git \
-      --disable-stack-smash-protection --disable-multithreading CC="$CC" CFLAGS="-O2"
+      --disable-stack-smash-protection --disable-multithreading CC="$CC" CFLAGS="-O2 -U_FORTIFY_SOURCE"
     make -s -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)" -C src/libFLAC
   ) > "$scratch/build.log" 2>&1 || { tail -30 "$scratch/build.log" >&2; exit 1; }
   mkdir -p "$flac/lib" "$flac/include/FLAC"
@@ -133,7 +133,7 @@ PY
 rm -f "$obj/libkey.raw"
 
 # ---------------------------------------------------------------- the program
-cflags="${test_ours:+-DRBP_TEST }-O2 -std=gnu11 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter -Wno-cast-function-type -Wno-unused-result -DFLAC__NO_DLL -D_FILE_OFFSET_BITS=32"
+cflags="${test_ours:+-DRBP_TEST }-O2 -U_FORTIFY_SOURCE -std=gnu11 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter -Wno-cast-function-type -Wno-unused-result -DFLAC__NO_DLL -D_FILE_OFFSET_BITS=32"
 inc="-include $here/posix.h -I$here -I$obj -I$hs -I$root/bridge -I$flac/include"
 cc() { "$CC" $cflags $inc "$@"; }
 # prepare.c: its absolute-path test is a Unix one ('/'): the same file, that test replaced, main renamed
@@ -157,8 +157,8 @@ cc -ffp-contract=off -c "$hs/resample.c" -o "$obj/resample.o"          # rekordb
 for f in mp3 mp4 manifest entry; do cc -c "$hs/$f.c" -o "$obj/$f.o"; done
 for f in decode_win kept_win library_win big_win readable_win glue_win cuda_win; do cc -c "$here/$f.c" -o "$obj/$f.o"; done
 # Apple's ALAC decoder: its own warnings aren't ours (multi-character constants, old C++)
-for f in ALACBitUtilities EndianPortable ag_dec dp_dec matrix_dec; do "$CC" -O2 -w -I"$alac" -c "$alac/$f.c" -o "$obj/alac_$f.o"; done
-"$CXX" -O2 -w -I"$alac" -c "$alac/ALACDecoder.cpp" -o "$obj/alac_ALACDecoder.o"
-"$CXX" -O2 -Wall -Wextra -Wno-multichar -I"$alac" -c "$here/alac_win.cpp" -o "$obj/alac_win.o"
+for f in ALACBitUtilities EndianPortable ag_dec dp_dec matrix_dec; do "$CC" -O2 -U_FORTIFY_SOURCE -w -I"$alac" -c "$alac/$f.c" -o "$obj/alac_$f.o"; done
+"$CXX" -O2 -U_FORTIFY_SOURCE -w -I"$alac" -c "$alac/ALACDecoder.cpp" -o "$obj/alac_ALACDecoder.o"
+"$CXX" -O2 -U_FORTIFY_SOURCE -Wall -Wextra -Wno-multichar -I"$alac" -c "$here/alac_win.cpp" -o "$obj/alac_win.o"
 "$CXX" "$obj"/*.o "$flac/lib/libFLAC.a" -static-libgcc -static-libstdc++ -lmfplat -lmfreadwrite -lmfuuid -lole32 -lshell32 -ladvapi32 -luuid -o "$out/rbsp-prepare.exe"
 echo "built $out/rbsp-prepare.exe"
