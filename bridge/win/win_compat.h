@@ -31,6 +31,10 @@
 #include <sddl.h>
 #include <shlobj.h>
 #include <knownfolders.h>
+/* older mingw-w64 (Debian 12) lacks it */
+#ifndef ERROR_REPARSE_POINT_ENCOUNTERED
+#define ERROR_REPARSE_POINT_ENCOUNTERED 4395L
+#endif
 #include <io.h>
 #include <fcntl.h>
 #include <errno.h>
