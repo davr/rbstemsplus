@@ -16,10 +16,10 @@ the [honest risks](../README.md#honest-risks). This page covers what is differen
 
 Until an official, signed release includes Windows, test builds are published as **prereleases**
 of this repository by the `windows-prerelease` workflow. Each says on its page how to install
-it, for example (the newest so far is `windows-test-10`):
+it, for example (the newest so far is `windows-test-11`):
 
 ```powershell
-irm https://github.com/davr/rbstemsplus/releases/download/windows-test-10/bootstrap.ps1 | iex
+irm https://github.com/davr/rbstemsplus/releases/download/windows-test-11/bootstrap.ps1 | iex
 ```
 
 A test build's window title says "TEST BUILD". It downloads everything from its own prerelease,
