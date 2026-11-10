@@ -23,7 +23,7 @@ static class PrepareWatch
         var facts = PrepareEnv.Facts(p, Payload.Saved(new PayloadFiles(p)));
         var problems = Prepare.Problems(facts);
         if (problems.Count > 0) { log.Write("prepared playlists not checked: " + string.Join(" ", problems)); return; }
-        var names = Prepare.ParsePlaylists(PrepareEnv.RunToEnd(new[] { "--playlists", "--library", p.RbLibraryFile }, TimeSpan.FromSeconds(30)).Out);
+        var names = Prepare.ParsePlaylists(PrepareEnv.RunToEnd(new[] { "--playlists", "--library", p.RbLibraryFile, "--rekordbox", PrepareEnv.RbDir() }, TimeSpan.FromSeconds(30)).Out);
         var baseArgs = PrepareEnv.BaseArgs(p, facts);
         var noticed = ReadNoticed(p);
         foreach (var s in sets)

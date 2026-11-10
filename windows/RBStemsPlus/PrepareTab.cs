@@ -87,7 +87,7 @@ sealed class PrepareTab : UserControl
     void LoadPlaylists()
     {
         listLoading = true;
-        var args = new List<string> { "--playlists", "--library", p.RbLibraryFile };
+        var args = new List<string> { "--playlists", "--library", p.RbLibraryFile, "--rekordbox", PrepareEnv.RbDir() };
         Task.Run(() =>
         {
             var r = PrepareEnv.RunToEnd(args, TimeSpan.FromSeconds(60));
@@ -166,7 +166,7 @@ sealed class PrepareTab : UserControl
         var baseArgs = PrepareEnv.BaseArgs(p, facts);
         Task.Run(() =>
         {
-            var list = Prepare.ParseTrackList(PrepareEnv.RunToEnd(new[] { "--tracks", pl.Id, "--library", p.RbLibraryFile }, TimeSpan.FromSeconds(60), cancel: cts.Token).Out);
+            var list = Prepare.ParseTrackList(PrepareEnv.RunToEnd(new[] { "--tracks", pl.Id, "--library", p.RbLibraryFile, "--rekordbox", PrepareEnv.RbDir() }, TimeSpan.FromSeconds(60), cancel: cts.Token).Out);
             if (cts.IsCancellationRequested) return;
             BeginInvoke(() => { if (cts.IsCancellationRequested) return; tracks = list; FillRows(); });
             var hint = 0;

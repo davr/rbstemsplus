@@ -40,6 +40,9 @@ static class PrepareEnv
         return f;
     }
 
+    /// rekordbox's folder: the helper reads its library through the sqlite3.dll there.
+    public static string RbDir() => Rekordbox.Current()?.Dir ?? "";
+
     /// The helper's arguments every run shares: the model rekordbox runs, the cache, its limit.
     public static List<string> BaseArgs(AppPaths p, PrepareFacts f)
     {
