@@ -143,10 +143,12 @@ the one `onnxruntime.dll` that Stems Cache replaces.
 
 ## Prepare playlists before a set (RB Stems Plus 1.3)
 
-> **In development on Windows.** The window (three tabs: **Status**, **Prepare**, **Manage**) and the checks are
-> in; the helper that makes the stems, `rbsp-prepare.exe`, is being ported from the Mac version (what works and
-> what doesn't is in [`windows-port/PREPARE.md`](windows-port/PREPARE.md)). Without the helper the Prepare tab
-> says so and stays off.
+> **New on Windows.** Checked on rekordbox 7.2.14 with an NVIDIA GPU: tracks the Prepare tab prepared loaded in
+> rekordbox with every part found in the cache (MP3, FLAC and AAC, at 44.1 and 48 kHz). What was measured, and
+> what is still open, is in [`windows-port/PREPARE.md`](windows-port/PREPARE.md).
+
+The window has three tabs: **Status** (the lights and your prepared playlists), **Prepare**, and **Manage**
+(install, reinstall and uninstall each feature, and the log).
 
 With Stems Cache installed, the **Prepare** tab makes a playlist's stems in advance, so every track of it loads
 with its stems at once in rekordbox, as if you had loaded it before (it writes the same entries rekordbox would).
@@ -163,11 +165,20 @@ with its stems at once in rekordbox, as if you had loaded it before (it writes t
 What to know:
 - **Prepared stems are used only when rekordbox is set to *Prioritize sound quality*** (Preferences › Extensions
   › STEMS). With *Prioritize speed* rekordbox uses another engine and the Prepare tab says so.
-- **Supported tracks (so far): 44.1 kHz MP3, AAC (M4A), ALAC, FLAC, AIFF and WAV.** A prepared entry is found by
-  rekordbox only if the helper decodes the file exactly as rekordbox does; this was measured for these formats on
-  rekordbox 7.2.14. Other sample rates are listed as *Skipped*; so is anything the helper can't decode.
+- **Supported tracks: MP3, AAC (M4A), ALAC, FLAC, AIFF and WAV**, at 44.1 kHz or another rate (48 kHz was
+  measured). A prepared entry is found by rekordbox only if the helper decodes the file exactly as rekordbox does;
+  this was measured on rekordbox 7.2.14. A track the helper can't decode, or whose file isn't there, is listed as
+  *Skipped* with the reason.
+- **Known gap:** for some AAC (M4A) files the last few seconds of the track are separated by rekordbox when you
+  load it (one part of about 11 s), because rekordbox ends the track slightly earlier than Windows's decoder does.
+  The rest of the track is prepared.
 - **Demucs v4 only for now.** With rekordbox's own model installed, preparing is refused.
-- It uses the GPU through CUDA when the optional runtime is installed (see above), else the CPU.
+- **Speed:** with the optional CUDA runtime (see above) about 25 times real time on an RTX 4060 laptop, so a
+  15-track playlist takes about 7 minutes. Without it the CPU is used, at about 3 times real time.
+- **A track that isn't at 44.1 kHz needs a processor with FMA** (every Intel and AMD processor since about 2015).
+  On an older one such a track is skipped.
+- **Where rekordbox's library is:** RB Stems Plus reads it where rekordbox keeps it, also when you moved it to
+  another drive (rekordbox's *Preferences › Advanced › Database*).
 - Installing, uninstalling, updating or clearing stems stops a run first (it asks). Quitting stops it too.
 - The kept sets are files in `%APPDATA%\rbstemsplus\kept`; Stems Cache never removes their stems while the date
   hasn't passed (unless its size limit is lowered below them). **Stop Keeping** on the Status tab lets one go.
@@ -229,6 +240,12 @@ Reinstalling rekordbox from rekordbox.com also always gives you Pioneer's files.
   CPU until rekordbox restarts. Send the log if it keeps happening.
 - **rekordbox closes when it opens a track, with CUDA installed.** Windows's event log names the
   module (`cudnn64_8.dll` meant a missing cuDNN part). Set `cuda=0` in `config.ini` and send the log.
+- **The Prepare tab lists no playlists, or says rekordbox's playlists can't be read.** rekordbox must be
+  installed and have been opened once. The reason is in the log on the **Manage** tab.
+- **A prepared playlist says "1 track to prepare" on the Status tab but the Prepare tab says it is skipped.**
+  The Status tab's check doesn't open the files, so a track that can't be prepared counts as not prepared yet.
+- **Preparing stopped, or the app closed.** Open `%LOCALAPPDATA%\rbstemsplus\Logs\app.log`: it has each track's
+  result, how the helper ended, and any error with its details. Send it with a report.
 - **Making a problem report.**
   1. Choose *Help › Create Report*. It saves a zip on your Desktop and can open a new GitHub
      issue.

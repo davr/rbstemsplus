@@ -39,6 +39,9 @@ its stems are made in advance, so every track loads with its stems at once (see
 - **Optional CUDA on NVIDIA GPUs:** Demucs v4 on the GPU at 20 to 25x real time (RTX 4060 laptop),
   installed by hand, with an automatic CPU fallback. DirectML can't run Demucs v4 on 8 GB GPUs.
 - **`rbsp-bench`:** a tool that times the model on your PC (CPU, DirectML or CUDA).
+- **Prepare playlists on Windows (1.3):** the Prepare tab makes a playlist's stems in advance, as on
+  the Mac, with CUDA when it is installed (about 25x real time). It decodes MP3, AAC, ALAC, FLAC,
+  AIFF and WAV as Windows rekordbox does, at 44.1 kHz and other rates.
 
 How to install, the CUDA steps and troubleshooting: **[RB Stems Plus on Windows](docs/windows.md)**.
 

@@ -173,3 +173,17 @@ Legend: [x] done · [~] in progress · [ ] to do · [!] blocked or needs the use
   - check that rekordbox starts at all with the bridge in place (does rekordbox check its DLLs' integrity?);
   - uninstall completely, and check that Pioneer's files come back.
 - [!] **Unknown until that test:** does rekordbox append the DirectML provider to the Demucs session, and does our Demucs v4 model run under DML? It falls back to CPU for unsupported ops.
+
+## RB Stems Plus 1.3.0 (upstream's Prepare playlists), 2026-11-10: ported and checked on the PC
+- Upstream 1.3.0 merged; the watcher's settle rules, the per-feature Reinstall buttons and the kept sets in the
+  bridge are ported (bridge tests under wine, app tests in `dotnet test`).
+- **The helper, `rbsp-prepare.exe`** (`helper/win/`): upstream's sources with a POSIX shim, rekordbox's own
+  `sqlite3.dll` and `libmpg123.dll`, Media Foundation for AAC, Apple's ALAC decoder, the CUDA path with a CPU fallback.
+  What was measured against rekordbox is in `PREPARE.md`.
+- **The app:** Status, Prepare and Manage tabs; the run with Pause and Stop; the check when rekordbox opens.
+- **On the PC (rekordbox 7.2.14, RTX 4060, CUDA):** two playlists prepared from the Prepare tab (15 and 44 tracks),
+  with Pause, Resume and a change of playlist during the run; prepared tracks loaded in rekordbox as hits (48 kHz FLAC
+  36 of 36, 48 kHz MP3 44 of 44, 48 kHz AAC 40 of 40, 44.1 kHz AAC 30 of 31).
+- **Open:** the AAC length rule (the one miss above), Stop during a run and the watcher's notification not yet tried
+  on the PC, a crash at the end of one run that was not reproduced after the notification icon was fixed (the log now
+  records such an error). Details in `PREPARE.md`, "Open findings".
