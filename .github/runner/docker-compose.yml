@@ -1,0 +1,15 @@
+# docker compose up -d --build        (first time: RUNNER_TOKEN=<token> docker compose up -d --build)
+services:
+  runner:
+    build: .
+    restart: unless-stopped
+    environment:
+      REPO: davr/rbstemsplus
+      RUNNER_NAME: rbstems-docker
+      RUNNER_TOKEN: ${RUNNER_TOKEN:-}
+    volumes:
+      - runner-state:/home/runner/actions-runner   # holds the registration and _work
+    cpus: 12
+    mem_limit: 14g
+volumes:
+  runner-state:
