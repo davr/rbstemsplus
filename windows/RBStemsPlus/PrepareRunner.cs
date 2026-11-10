@@ -84,14 +84,22 @@ static class PrepareEnv
         {
             if (e.Data == null) return;
             lock (o) o.AppendLine(e.Data);
-            if (track != null && Prepare.ParseRunLine(e.Data) is Prepare.RunLine.TrackDone t) track(t.Track);
+            try { if (track != null && Prepare.ParseRunLine(e.Data) is Prepare.RunLine.TrackDone t) track(t.Track); }
+            catch (Exception) { }                              // a caller's error must not end the process from this thread
         };
         proc.BeginOutputReadLine();
         proc.BeginErrorReadLine();
-        using var reg = cancel.Register(() => { try { if (!proc.HasExited) proc.Kill(true); } catch (InvalidOperationException) { } });
-        if (!proc.WaitForExit((int)(timeout ?? TimeSpan.FromMinutes(5)).TotalMilliseconds)) { try { proc.Kill(true); } catch (InvalidOperationException) { } }
+        using var reg = cancel.Register(() => End(proc));
+        if (!proc.WaitForExit((int)(timeout ?? TimeSpan.FromMinutes(5)).TotalMilliseconds)) End(proc);
         proc.WaitForExit();
         lock (o) lock (err) return (proc.ExitCode, o.ToString(), err.ToString().Trim());
+    }
+
+    /// Ends a helper. Kill can fail in several ways (it has just exited, part of its tree couldn't be ended): none matters.
+    static void End(Process proc)
+    {
+        try { if (!proc.HasExited) proc.Kill(true); }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or AggregateException or NotSupportedException) { }
     }
 
     /// A prepared playlist's check (args: an estimate of set name): the playlist as it is now in rekordbox's library, so a
@@ -129,27 +137,61 @@ sealed class PrepareRun
 
     public PrepareRun(string playlist) { Playlist = playlist; }
 
-    public bool Start(AppPaths ap, IEnumerable<string> args, Action<Prepare.RunLine> line, Action<int, string> ended)
+    /// log gets the run's story: its start, each track's line and the helper's own messages as they come (paths
+    /// masked), and how it ended (exit status, how long, the last line seen), so a run that stops is explained.
+    public bool Start(AppPaths ap, Log log, IEnumerable<string> args, Action<Prepare.RunLine> line, Action<int, string> ended)
     {
         try { proc = Process.Start(PrepareEnvStart(args)); }
-        catch (Exception e) when (e is System.ComponentModel.Win32Exception or IOException) { return false; }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or IOException) { log.Write("prepare: the helper can't start: " + e.Message); return false; }
         if (proc == null) return false;
         var pid = proc.Id;
+        var began = DateTime.UtcNow;
+        log.Write($"prepare: helper started (pid {pid})");
         PrepareEnv.MarkRun(ap, Playlist, pid);
         pauseEv = new EventWaitHandle(false, EventResetMode.ManualReset, $@"Local\rbsp-prepare-{pid}-pause");
         stopEv = new EventWaitHandle(false, EventResetMode.ManualReset, $@"Local\rbsp-prepare-{pid}-stop");
         var err = new StringBuilder();
-        proc.ErrorDataReceived += (_, e) => { if (e.Data != null) lock (err) err.AppendLine(e.Data); };
-        proc.OutputDataReceived += (_, e) => { if (e.Data != null && Prepare.ParseRunLine(e.Data) is { } r) line(r); };
+        string last = "";
+        int lines = 0;
+        proc.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data == null) return;
+            lock (err) err.AppendLine(e.Data);
+            log.Write("prepare: helper says: " + Prepare.NoPaths(e.Data));
+        };
+        proc.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data == null) return;
+            // this thread is the helper's output reader: an error thrown here would end the app
+            try
+            {
+                last = e.Data; lines++;
+                var r = Prepare.ParseRunLine(e.Data);
+                if (r is Prepare.RunLine.TrackDone t)
+                    log.Write($"prepare: track {Prepare.NoPaths(t.Track.Name)}: {t.Track.Result}" + (t.Track.Result == "prepared" ? $" (written {t.Track.Written}, already {t.Track.Already}, refused {t.Track.Refused})" : t.Track.Why.Length > 0 ? ": " + Prepare.NoPaths(t.Track.Why) : ""));
+                else if (r == null) log.Write("prepare: a line the app doesn't know: " + Prepare.NoPaths(e.Data.Length > 300 ? e.Data[..300] : e.Data));
+                if (r != null) line(r);
+            }
+            catch (Exception x) { log.Write("prepare: ERROR while reading the helper's line: " + x); }
+        };
         proc.EnableRaisingEvents = true;
         var p = proc;
         proc.Exited += (_, _) =>
         {
-            p.WaitForExit();                                   // the output handlers have run to the end
-            string e; lock (err) e = err.ToString().Trim();
-            PrepareEnv.UnmarkRun(ap);
-            ended(p.ExitCode, e);
-            pauseEv?.Dispose(); stopEv?.Dispose();
+            int status = -1;
+            string e = "";
+            try
+            {
+                p.WaitForExit();                               // the output handlers have run to the end
+                status = p.ExitCode;
+                lock (err) e = err.ToString().Trim();
+                log.Write($"prepare: helper ended (pid {pid}, exit status {status}{(status < 0 || status > 255 ? $" = 0x{status:X8}, a crash" : "")}, {(DateTime.UtcNow - began).TotalSeconds:0} s, {lines} lines; last: {Prepare.NoPaths(last.Length > 200 ? last[..200] : last)})");
+                PrepareEnv.UnmarkRun(ap);
+            }
+            catch (Exception x) { log.Write("prepare: ERROR at the helper's end: " + x); }
+            try { ended(status, e); }
+            catch (Exception x) { log.Write("prepare: ERROR after the helper's end: " + x); }
+            try { pauseEv?.Dispose(); stopEv?.Dispose(); } catch (Exception) { }
         };
         proc.BeginOutputReadLine();
         proc.BeginErrorReadLine();

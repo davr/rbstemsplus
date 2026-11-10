@@ -22,6 +22,7 @@ sealed class SetsTab : UserControl
     public SetsTab(AppPaths p, Log log, Func<Manifest?> saved, Func<string, string> nameOf, Func<string?> runningSet, Action<string> prepareAgain)
     {
         this.p = p; this.log = log; this.saved = saved; this.nameOf = nameOf; this.runningSet = runningSet; this.prepareAgain = prepareAgain;
+        _ = Handle;                                            // made now, on the window's thread: background results are posted to it
         list.Columns.Add("Playlist", Ui.S(260)); list.Columns.Add("Kept until", Ui.S(110)); list.Columns.Add("Tracks", Ui.S(60)); list.Columns.Add("State", Ui.S(260));
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = Ui.S(40), Padding = new Padding(Ui.S(8), Ui.S(4), Ui.S(0), Ui.S(0)) };
         buttons.Controls.AddRange(new Control[] { againBtn, stopBtn });
@@ -34,6 +35,8 @@ sealed class SetsTab : UserControl
     }
 
     Prepare.KeptSet? Current() => list.SelectedItems.Count == 1 ? list.SelectedItems[0].Tag as Prepare.KeptSet : null;
+
+    void Post(Action a) => Ui.Post(this, log, "status", a);
 
     void UpdateButtons()
     {
@@ -70,6 +73,8 @@ sealed class SetsTab : UserControl
         var baseArgs = PrepareEnv.BaseArgs(p, facts);
         Task.Run(() =>
         {
+          try
+          {
             foreach (var s in sets)
             {
                 if (mine.IsCancellationRequested) return;
@@ -77,13 +82,15 @@ sealed class SetsTab : UserControl
                 var r = PrepareEnv.CheckSet(s.Name, baseArgs.Concat(new[] { "--estimate", "--quick", "--keep", s.Name }).ToList(),
                                             a => PrepareEnv.RunToEnd(a, TimeSpan.FromSeconds(120), cancel: mine.Token));
                 var state = Prepare.SetState(Prepare.ParseEstimate(r.Out));
-                BeginInvoke(() =>
+                Post(() =>
                 {
                     if (mine.IsCancellationRequested) return;
                     states[s.Name] = state;
                     foreach (ListViewItem it in list.Items) if (it.Tag is Prepare.KeptSet k && k.Name == s.Name) it.SubItems[3].Text = state;
                 });
             }
+          }
+          catch (Exception e) { log.Write("status: ERROR while checking the sets: " + e); }
         });
     }
 

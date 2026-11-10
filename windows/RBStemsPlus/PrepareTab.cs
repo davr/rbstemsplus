@@ -28,6 +28,7 @@ sealed class PrepareTab : UserControl
     Prepare.Estimate? estimate;
     PrepareFacts facts = new();
     PrepareRun? run;
+    List<Prepare.TrackLine>? runTracks;
     CancellationTokenSource? checkCts;
     bool checking, listLoaded, listLoading;
     string runSummary = "";
@@ -42,6 +43,7 @@ sealed class PrepareTab : UserControl
     public PrepareTab(AppPaths p, Log log, Func<Manifest?> saved, Func<bool> otherActionRunning)
     {
         this.p = p; this.log = log; this.saved = saved; this.otherActionRunning = otherActionRunning;
+        _ = Handle;                                            // made now, on the window's thread: background results are posted to it
         rows.Columns.Add("Track", Ui.S(330)); rows.Columns.Add("Result", Ui.S(90)); rows.Columns.Add("Note", Ui.S(260));
         until.Value = DateTime.Today.AddDays(PrepareDefaults.KeepDaysDefault);
         until.MinDate = DateTime.Today.AddDays(1);
@@ -75,6 +77,15 @@ sealed class PrepareTab : UserControl
         else if (selected != null && !checking && !IsRunning) Check();
     }
 
+    void Post(Action a) => Ui.Post(this, log, "prepare", a);
+
+    /// Work off the window's thread. An error in it is logged with its stack, then failed runs on the window's thread.
+    void Background(string what, Action failed, Action work) => Task.Run(() =>
+    {
+        try { work(); }
+        catch (Exception e) { log.Write($"prepare: ERROR while {what}: {e}"); Post(failed); }
+    });
+
     void ShowProblems()
     {
         var list = Prepare.Problems(facts);
@@ -88,11 +99,11 @@ sealed class PrepareTab : UserControl
     {
         listLoading = true;
         var args = new List<string> { "--playlists", "--library", p.RbLibraryFile, "--rekordbox", PrepareEnv.RbDir() };
-        Task.Run(() =>
+        Background("reading the playlists", () => { listLoading = false; }, () =>
         {
             var r = PrepareEnv.RunToEnd(args, TimeSpan.FromSeconds(60));
             var list = Prepare.ParsePlaylists(r.Out);
-            BeginInvoke(() =>
+            Post(() =>
             {
                 listLoading = false;
                 if (list.Count == 0 && r.Status != 0) { problems.Text = "rekordbox's playlists can't be read" + (r.Err.Length > 0 ? ": " + Prepare.NoPaths(r.Err) : "."); problems.Height = Ui.S(40); log.Write("prepare: playlists: " + Prepare.NoPaths(r.Err)); return; }
@@ -142,39 +153,56 @@ sealed class PrepareTab : UserControl
 
     void Choose(Prepare.Playlist? pl)
     {
-        if (IsRunning && pl?.Id != selected?.Id) { /* the run keeps its playlist; the tab shows the one chosen */ }
+        CancelCheck();
         selected = pl;
         estimate = null;
-        tracks = new();
-        rows.Items.Clear();
         nameLabel.Text = pl?.Name ?? "Choose a playlist";
-        info.Text = pl == null ? "" : pl.CanPrepare ? "Checking…" : "Only playlists can be prepared, not folders or intelligent playlists.";
+        if (IsRunning && pl != null && pl.Id == run!.Playlist && runTracks != null)
+        {
+            // back on the playlist being prepared: its rows as the run has them so far
+            tracks = runTracks;
+            FillRows();
+            info.Text = "Being prepared now.";
+            UpdateUi();
+            return;
+        }
+        tracks = new();                                        // a list of its own: the run keeps runTracks
+        rows.Items.Clear();
+        info.Text = pl == null ? "" : !pl.CanPrepare ? "Only playlists can be prepared, not folders or intelligent playlists."
+                  : IsRunning ? "Another playlist is being prepared. This one can be checked once that is done." : "Checking…";
         if (pl is { CanPrepare: true }) Check();
         UpdateUi();
+    }
+
+    void CancelCheck()
+    {
+        try { checkCts?.Cancel(); } catch (Exception e) { log.Write("prepare: ERROR while stopping a check: " + e); }
+        checkCts = null;
+        checking = false;
     }
 
     /// The tracks as the library lists them, then the estimate over them.
     void Check()
     {
         if (selected is not { CanPrepare: true } pl || IsRunning) return;
-        checkCts?.Cancel();
+        CancelCheck();
         var cts = checkCts = new CancellationTokenSource();
         checking = true;
         estimate = null;
         info.Text = "Checking…";
         UpdateUi();
         var baseArgs = PrepareEnv.BaseArgs(p, facts);
-        Task.Run(() =>
+        Background("checking a playlist", () => { if (cts.IsCancellationRequested) return; checking = false; info.Text = "The check failed (the log on the Manage tab says why)."; UpdateUi(); }, () =>
         {
             var list = Prepare.ParseTrackList(PrepareEnv.RunToEnd(new[] { "--tracks", pl.Id, "--library", p.RbLibraryFile, "--rekordbox", PrepareEnv.RbDir() }, TimeSpan.FromSeconds(60), cancel: cts.Token).Out);
             if (cts.IsCancellationRequested) return;
-            BeginInvoke(() => { if (cts.IsCancellationRequested) return; tracks = list; FillRows(); });
+            Post(() => { if (cts.IsCancellationRequested) return; tracks = list; FillRows(); });
             var hint = 0;
             var r = PrepareEnv.RunToEnd(baseArgs.Concat(new[] { "--estimate", "--keep", pl.Id, "--playlist", pl.Id }), TimeSpan.FromMinutes(10),
-                t => BeginInvoke(() => { if (cts.IsCancellationRequested) return; hint = Prepare.Place(t, tracks, hint) + 1; UpdateRow(hint - 1); }), cts.Token);
+                t => Post(() => { if (cts.IsCancellationRequested) return; hint = Prepare.Place(t, tracks, hint) + 1; UpdateRow(hint - 1); }), cts.Token);
             if (cts.IsCancellationRequested) return;
             var e = Prepare.ParseEstimate(r.Out);
-            BeginInvoke(() =>
+            Post(() =>
             {
                 if (cts.IsCancellationRequested) return;
                 checking = false;
@@ -242,12 +270,13 @@ sealed class PrepareTab : UserControl
         double keptGB = 0;
         var r = new PrepareRun(pl.Id);
         run = r;
+        var mine = runTracks = tracks;                         // the run's rows, whatever playlist the tab shows meanwhile
         runSummary = "Starting…";
         lastRunLine = null;
         bar.Visible = true; bar.Value = 0;
         var hint = 0;
         log.Write($"prepare: playlist {pl.Id}: started{(first != null ? $" (the first {first} tracks)" : "")}");
-        bool started = r.Start(p, args, line => BeginInvoke(() =>
+        bool started = r.Start(p, log, args, line => Post(() =>
         {
             switch (line)
             {
@@ -256,8 +285,8 @@ sealed class PrepareTab : UserControl
                     if (g.Files > 0 && g.Chunks > 0) bar.Value = Math.Clamp((int)(1000.0 * (g.File + (double)g.Chunk / g.Chunks) / g.Files), 0, 1000);
                     break;
                 case Prepare.RunLine.TrackDone t:
-                    hint = Prepare.Place(t.Track, tracks, hint) + 1;
-                    UpdateRow(hint - 1);
+                    hint = Prepare.Place(t.Track, mine, hint) + 1;
+                    if (ReferenceEquals(tracks, mine)) UpdateRow(hint - 1);
                     if (t.Track.Result == "skipped") skipped++; else if (t.Track.Result == "prepared") finished++;
                     break;
                 case Prepare.RunLine.Room m:
@@ -268,9 +297,10 @@ sealed class PrepareTab : UserControl
                     break;
             }
             UpdateUi();
-        }), (status, err) => BeginInvoke(() =>
+        }), (status, err) => Post(() =>
         {
             run = null;
+            runTracks = null;
             bar.Visible = false;
             if (status != 0 && err.Length > 0) { runSummary = err; log.Write("prepare: the helper stopped: " + Prepare.NoPaths(err)); }
             else if (!gotDone) { runSummary = "The preparing stopped unexpectedly. Click Check Again, then Prepare."; log.Write($"prepare: the helper ended without its last line (status {status})"); }
@@ -286,7 +316,7 @@ sealed class PrepareTab : UserControl
             UpdateUi();
             Check();
         }));
-        if (!started) { run = null; bar.Visible = false; runSummary = "The helper can't start."; log.Write("prepare: the helper can't start"); }
+        if (!started) { run = null; runTracks = null; bar.Visible = false; runSummary = "The helper can't start."; log.Write("prepare: the helper can't start"); }
         UpdateUi();
     }
 
@@ -322,19 +352,36 @@ sealed class PrepareTab : UserControl
 /// A Windows notification (a tray balloon), for a run that ended and for the watcher's check: never a dialog over rekordbox.
 static class Toast
 {
+    // One tray icon for the process, made at the first notification and shown only while a notification is up.
+    // (An icon made and disposed for each notification was used after its disposal by its own timer.)
+    static NotifyIcon? icon;
+    static System.Windows.Forms.Timer? hide;
+
     public static void Show(string title, string body)
     {
         try
         {
-            var icon = new NotifyIcon { Icon = SystemIcons.Information, Visible = true, BalloonTipTitle = title, BalloonTipText = body.Length > 240 ? body[..240] : body };
-            try { icon.Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!) ?? SystemIcons.Information; } catch (Exception) { }
-            icon.BalloonTipClosed += (_, _) => icon.Dispose();
-            icon.BalloonTipClicked += (_, _) => icon.Dispose();
+            if (icon == null)
+            {
+                icon = new NotifyIcon { Icon = SystemIcons.Information, Text = "RB Stems Plus" };
+                try { icon.Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!) ?? SystemIcons.Information; } catch (Exception) { }
+                icon.BalloonTipClosed += (_, _) => Hide();
+                icon.BalloonTipClicked += (_, _) => Hide();
+                hide = new System.Windows.Forms.Timer { Interval = 20000 };
+                hide.Tick += (_, _) => Hide();
+                Application.ApplicationExit += (_, _) => { try { hide?.Dispose(); icon?.Dispose(); } catch (Exception) { } hide = null; icon = null; };
+            }
+            icon.Visible = true;
+            icon.BalloonTipTitle = title.Length > 60 ? title[..60] : title;
+            icon.BalloonTipText = body.Length == 0 ? " " : body.Length > 240 ? body[..240] : body;
             icon.ShowBalloonTip(10000);
-            var t = new System.Windows.Forms.Timer { Interval = 15000 };
-            t.Tick += (_, _) => { t.Stop(); t.Dispose(); icon.Visible = false; icon.Dispose(); };
-            t.Start();
+            hide!.Stop(); hide.Start();
         }
         catch (Exception) { }
+    }
+
+    static void Hide()
+    {
+        try { hide?.Stop(); if (icon != null) icon.Visible = false; } catch (Exception) { }
     }
 }

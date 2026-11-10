@@ -32,6 +32,7 @@ static class Program
         {
             using var wm = new Mutex(true, Consts.WatcherMutex, out bool firstWatcher);
             if (!firstWatcher) return 0;
+            LogErrors(new Log(p.WatcherLog), "watcher");
             Application.Run(new Watcher(p));
             return 0;
         }
@@ -42,8 +43,24 @@ static class Program
             Files.TryWriteText(Path.Combine(p.Support, "show"), "show\n");
             return 0;
         }
+        var appLog = new Log(p.AppLog);
+        LogErrors(appLog, "app");
         Application.Run(new MainForm(p));
+        appLog.Write("app: closed");
         return 0;
+    }
+
+    /// Every error nothing else caught goes to the log with its stack, so a crash leaves a trace. An error in the
+    /// window's own thread is logged and the app carries on (no .NET error dialog); one on another thread ends the
+    /// process, as .NET has it, after its line is written. "closed" without a CRASH line before it is a normal quit;
+    /// a log that just stops means the process was ended from outside.
+    static void LogErrors(Log log, string who)
+    {
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        Application.ThreadException += (_, e) => log.Write($"{who}: ERROR in the window's thread (carried on): {e.Exception}");
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => log.Write($"{who}: CRASH (unhandled error{(e.IsTerminating ? ", the process ends" : "")}): {e.ExceptionObject}");
+        TaskScheduler.UnobservedTaskException += (_, e) => { log.Write($"{who}: ERROR in a background task: {e.Exception}"); e.SetObserved(); };
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => log.Write($"{who}: process exit");
     }
 }
 
