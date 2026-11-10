@@ -24,10 +24,10 @@ This page records what was measured on **rekordbox 7.2.14, Windows 11** (2026-11
 | AIFF (16-bit) | `FileReadAiff` | plain decode | **exact** (35 chunks) |
 | WAV (16-bit) | its WAV reader | plain decode | **exact** (17 chunks) |
 | ALAC (in M4A) | `FileReadAlac` | plain decode (ffmpeg's) | **exact** (36 chunks) |
-| other rates (tested 48 kHz FLAC) | `SamplingFunctionSRC` (Kaiser sinc, 29 taps) | upstream's `resample.c` ported to NumPy | **not exact yet**: the same structure (pairs from both ends with FMA), but about 10% of samples are one float32 step off, in nearly every filter phase. The coefficient table and the summation order are the suspects; an impulse-response file would tell (not made: it needs a new file in the library) |
+| other rates (tested 48 kHz FLAC) | `SamplingFunctionSRC` (Kaiser sinc, 29 taps) | upstream's `resample.c` with **one change for x64**: in the convolution, which takes the taps in pairs from both ends, the first tap of each pair is a fused multiply-add and the second a multiply then an add (on arm64 both are fused); the middle tap is fused | **exact** (YACHT, Psychic City (Classixx Remix), 48 kHz FLAC: all 23 chunks, both channels). Found by trying the orders and fusings against the dumps: `helper/win/research/resample_x64_search.py`, checked by `resample_x64_verify.py` |
 
-In the library (69 files profiled by `ffprobe`), 59 of 60 M4A, 38 of 40 FLAC and all MP3, AIFF and WAV are
-44.1 kHz, so resampling matters for a few percent of tracks.
+In a sample of the library (69 files profiled by `ffprobe`) nearly everything is 44.1 kHz, but real playlists have
+more: 3 of 15 tracks in one, all 48 kHz (MP3 and FLAC).
 
 ## Not measured yet
 - 24-bit AIFF/WAV/FLAC, mono and more than two channels, HE-AAC and fragmented MP4, 8-bit.
@@ -36,8 +36,11 @@ In the library (69 files profiled by `ffprobe`), 59 of 60 M4A, 38 of 40 FLAC and
 - rekordbox versions other than 7.2.14.
 
 ## Decisions
-- Prepare on Windows supports **44.1 kHz MP3, AAC (M4A), ALAC, FLAC, AIFF and WAV**. Any other rate is reported as
-  skipped ("not supported on Windows yet"), never prepared wrongly. Rates are added when the resampler matches.
+- Prepare on Windows supports **MP3, AAC (M4A), ALAC, FLAC, AIFF and WAV**. A file that isn't at 44.1 kHz goes through
+  rekordbox's resampler as its x64 build has it (measured exactly at 48 kHz with FLAC; the other rates and the other
+  decoders ahead of it use the same code and are not measured one by one). The fused multiply-adds are the processor's
+  own (the helper's resampler is compiled with `-mfma`); on a processor without FMA a file at another rate is skipped,
+  because what rekordbox does there isn't known.
 - The AAC reader must request **16-bit PCM** from Media Foundation.
 - The helper uses **rekordbox's own `libmpg123.dll`**, found in its folder, like the macOS helper.
 - Same format of kept sets, manifests and entries as macOS (kept files are byte-identical).
