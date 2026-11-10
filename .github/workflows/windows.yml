@@ -15,16 +15,16 @@ permissions:
 
 jobs:
   linux:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: "tools"
         run: |
-          # the self-hosted runner has these installed by hand
-          for c in x86_64-w64-mingw32-gcc wine xz unzip zip ffmpeg python3 curl dotnet; do
-            command -v $c > /dev/null || { echo "the runner lacks $c"; exit 1; }
-          done
-          dotnet --version
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mingw-w64 wine64 wine xz-utils unzip ffmpeg > /dev/null
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "8.0.x" }
       - name: "the bridge's tests (wine)"
         run: RBSTEMS_NO_SKIP= bridge/win/tests/run.sh
       - name: "the prepare helper's tests (wine)"
