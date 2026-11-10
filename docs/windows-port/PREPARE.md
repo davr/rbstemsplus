@@ -73,3 +73,17 @@ Running log; newest last. Build: `make helper-win` (`helper/win/build.sh`); test
   AAC decoder), the real SQLCipher key (the test `sqlite3.dll` accepts any key).
 - **Not done**: other sample rates (skipped, by decision), the app's updater only swaps `RBStemsPlus.exe`, so a helper
   update needs `windows/RBStemsPlus/Updater.cs` to copy `rbsp-prepare.exe` too (the install command copies the whole zip).
+
+## Open findings (2026-11-10, rekordbox 7.2.14, checked by loading prepared tracks: `hit` / `miss` in bridge.log)
+- **Hits confirmed in rekordbox** for tracks the helper prepared: 48 kHz FLAC (36 of 36), 48 kHz MP3 (44 of 44),
+  48 kHz AAC (40 of 40), 44.1 kHz AAC (30 of 31).
+- **AAC length, not fixed yet**: for one Lavf-written M4A ("Oh, Miles") the last chunk missed. Media Foundation gives
+  14,726,144 samples (every packet, 14,381 x 1024); rekordbox's track is **14,724,544** samples, from sample 0 (found by
+  hashing the last chunk at every length: `helper/win/research/aac_length_search.py`). That is ffprobe's `duration_ts`:
+  the sample table's total (14,725,568, last packet 448) less the 1,024-sample edit-list start. The helper should cut the
+  decode to that length (`mp4.c` already reads the sample table); which MP4 field rekordbox reads is to be confirmed on
+  a second file.
+- **A final silent chunk**: after a 48 kHz MP3 rekordbox sent one more, all-zero chunk than the helper counted. Silent
+  chunks are never cached, so nothing is lost but one model run at the track's end. It suggests rekordbox's resampled
+  length is longer than `resample.c`'s for MP3; a track at another rate that ends without digital silence may miss on
+  its last chunk. Not measured.
