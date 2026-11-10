@@ -21,7 +21,7 @@ jobs:
       - name: "tools"
         run: |
           # the self-hosted runner has these installed by hand
-          for c in x86_64-w64-mingw32-gcc wine64 xz unzip zip ffmpeg python3 curl dotnet; do
+          for c in x86_64-w64-mingw32-gcc wine xz unzip zip ffmpeg python3 curl dotnet; do
             command -v $c > /dev/null || { echo "the runner lacks $c"; exit 1; }
           done
           dotnet --version
