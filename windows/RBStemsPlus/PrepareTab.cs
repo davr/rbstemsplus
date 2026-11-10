@@ -11,16 +11,16 @@ sealed class PrepareTab : UserControl
     readonly Log log;
     readonly Func<Manifest?> saved;
     readonly Func<bool> otherActionRunning;
-    readonly Label problems = new() { Dock = DockStyle.Top, AutoSize = false, Height = 0, ForeColor = Color.Firebrick, Padding = new Padding(8, 6, 8, 0) };
-    readonly TreeView tree = new() { Dock = DockStyle.Left, Width = 250, HideSelection = false };
-    readonly Label nameLabel = new() { Text = "Choose a playlist", AutoSize = false, Height = 28, Dock = DockStyle.Top, Font = new Font(SystemFonts.MessageBoxFont ?? SystemFonts.DefaultFont, FontStyle.Bold) };
-    readonly Label info = new() { AutoSize = false, Height = 62, Dock = DockStyle.Top };
+    readonly Label problems = new() { Dock = DockStyle.Top, AutoSize = false, Height = Ui.S(0), ForeColor = Color.Firebrick, Padding = new Padding(Ui.S(8), Ui.S(6), Ui.S(8), Ui.S(0)) };
+    readonly TreeView tree = new() { Dock = DockStyle.Left, Width = Ui.S(250), HideSelection = false };
+    readonly Label nameLabel = new() { Text = "Choose a playlist", AutoSize = false, Height = Ui.S(28), Dock = DockStyle.Top, Font = new Font(SystemFonts.MessageBoxFont ?? SystemFonts.DefaultFont, FontStyle.Bold) };
+    readonly Label info = new() { AutoSize = false, Height = Ui.S(62), Dock = DockStyle.Top };
     readonly ListView rows = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false };
-    readonly DateTimePicker until = new() { Format = DateTimePickerFormat.Short, Width = 110 };
-    readonly Button prepareBtn = new() { Text = "Prepare", Width = 90, Height = 28 }, checkBtn = new() { Text = "Check Again", Width = 100, Height = 28 },
-                    pauseBtn = new() { Text = "Pause", Width = 80, Height = 28 }, stopBtn = new() { Text = "Stop", Width = 80, Height = 28 };
-    readonly Label runLine = new() { AutoSize = false, Height = 22, Dock = DockStyle.Bottom, ForeColor = SystemColors.GrayText };
-    readonly ProgressBar bar = new() { Dock = DockStyle.Bottom, Height = 14, Minimum = 0, Maximum = 1000, Visible = false };
+    readonly DateTimePicker until = new() { Format = DateTimePickerFormat.Short, Width = Ui.S(110) };
+    readonly Button prepareBtn = new() { Text = "Prepare", Width = Ui.S(90), Height = Ui.S(28) }, checkBtn = new() { Text = "Check Again", Width = Ui.S(100), Height = Ui.S(28) },
+                    pauseBtn = new() { Text = "Pause", Width = Ui.S(80), Height = Ui.S(28) }, stopBtn = new() { Text = "Stop", Width = Ui.S(80), Height = Ui.S(28) };
+    readonly Label runLine = new() { AutoSize = false, Height = Ui.S(22), Dock = DockStyle.Bottom, ForeColor = SystemColors.GrayText };
+    readonly ProgressBar bar = new() { Dock = DockStyle.Bottom, Height = Ui.S(14), Minimum = 0, Maximum = 1000, Visible = false };
 
     List<Prepare.Playlist> playlists = new();
     Prepare.Playlist? selected;
@@ -42,13 +42,13 @@ sealed class PrepareTab : UserControl
     public PrepareTab(AppPaths p, Log log, Func<Manifest?> saved, Func<bool> otherActionRunning)
     {
         this.p = p; this.log = log; this.saved = saved; this.otherActionRunning = otherActionRunning;
-        rows.Columns.Add("Track", 330); rows.Columns.Add("Result", 90); rows.Columns.Add("Note", 260);
+        rows.Columns.Add("Track", Ui.S(330)); rows.Columns.Add("Result", Ui.S(90)); rows.Columns.Add("Note", Ui.S(260));
         until.Value = DateTime.Today.AddDays(PrepareDefaults.KeepDaysDefault);
         until.MinDate = DateTime.Today.AddDays(1);
         until.MaxDate = DateTime.Today.AddDays(365);
-        var buttons = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, Padding = new Padding(0, 4, 0, 0), WrapContents = false };
-        buttons.Controls.AddRange(new Control[] { new Label { Text = "Keep until", AutoSize = true, Margin = new Padding(0, 8, 4, 0) }, until, prepareBtn, checkBtn, pauseBtn, stopBtn });
-        var right = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12, 6, 8, 6) };
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Top, Height = Ui.S(40), Padding = new Padding(Ui.S(0), Ui.S(4), Ui.S(0), Ui.S(0)), WrapContents = false };
+        buttons.Controls.AddRange(new Control[] { new Label { Text = "Keep until", AutoSize = true, Margin = new Padding(Ui.S(0), Ui.S(8), Ui.S(4), Ui.S(0)) }, until, prepareBtn, checkBtn, pauseBtn, stopBtn });
+        var right = new Panel { Dock = DockStyle.Fill, Padding = new Padding(Ui.S(12), Ui.S(6), Ui.S(8), Ui.S(6)) };
         right.Controls.Add(rows);
         right.Controls.Add(runLine);
         right.Controls.Add(bar);
@@ -95,7 +95,7 @@ sealed class PrepareTab : UserControl
             BeginInvoke(() =>
             {
                 listLoading = false;
-                if (list.Count == 0 && r.Status != 0) { problems.Text = "rekordbox's playlists can't be read" + (r.Err.Length > 0 ? ": " + Prepare.NoPaths(r.Err) : "."); problems.Height = 40; log.Write("prepare: playlists: " + Prepare.NoPaths(r.Err)); return; }
+                if (list.Count == 0 && r.Status != 0) { problems.Text = "rekordbox's playlists can't be read" + (r.Err.Length > 0 ? ": " + Prepare.NoPaths(r.Err) : "."); problems.Height = Ui.S(40); log.Write("prepare: playlists: " + Prepare.NoPaths(r.Err)); return; }
                 listLoaded = true;
                 playlists = list;
                 DrawTree();

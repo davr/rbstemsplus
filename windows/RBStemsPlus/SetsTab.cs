@@ -14,16 +14,16 @@ sealed class SetsTab : UserControl
     readonly Func<string?> runningSet;
     readonly Action<string> prepareAgain;
     readonly ListView list = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false };
-    readonly Button againBtn = new() { Text = "Prepare Again", Width = 120, Height = 28 }, stopBtn = new() { Text = "Stop Keeping", Width = 120, Height = 28 };
-    readonly Label empty = new() { Dock = DockStyle.Top, AutoSize = false, Height = 40, Padding = new Padding(8, 8, 8, 0), ForeColor = SystemColors.GrayText };
+    readonly Button againBtn = new() { Text = "Prepare Again", Width = Ui.S(120), Height = Ui.S(28) }, stopBtn = new() { Text = "Stop Keeping", Width = Ui.S(120), Height = Ui.S(28) };
+    readonly Label empty = new() { Dock = DockStyle.Top, AutoSize = false, Height = Ui.S(40), Padding = new Padding(Ui.S(8), Ui.S(8), Ui.S(8), Ui.S(0)), ForeColor = SystemColors.GrayText };
     readonly Dictionary<string, string> states = new();
     CancellationTokenSource? cts;
 
     public SetsTab(AppPaths p, Log log, Func<Manifest?> saved, Func<string, string> nameOf, Func<string?> runningSet, Action<string> prepareAgain)
     {
         this.p = p; this.log = log; this.saved = saved; this.nameOf = nameOf; this.runningSet = runningSet; this.prepareAgain = prepareAgain;
-        list.Columns.Add("Playlist", 260); list.Columns.Add("Kept until", 110); list.Columns.Add("Tracks", 60); list.Columns.Add("State", 260);
-        var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 40, Padding = new Padding(8, 4, 0, 0) };
+        list.Columns.Add("Playlist", Ui.S(260)); list.Columns.Add("Kept until", Ui.S(110)); list.Columns.Add("Tracks", Ui.S(60)); list.Columns.Add("State", Ui.S(260));
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = Ui.S(40), Padding = new Padding(Ui.S(8), Ui.S(4), Ui.S(0), Ui.S(0)) };
         buttons.Controls.AddRange(new Control[] { againBtn, stopBtn });
         Controls.Add(list);
         Controls.Add(buttons);
