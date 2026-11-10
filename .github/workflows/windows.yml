@@ -20,16 +20,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: "tools"
         run: |
-          # the self-hosted runner keeps its tools; missing ones are installed (needs passwordless sudo)
-          need=""
-          for c in x86_64-w64-mingw32-gcc wine64 xz unzip ffmpeg python3 zip curl; do command -v $c > /dev/null || need=1; done
-          if [ -n "$need" ]; then
-            sudo -n dpkg --add-architecture i386
-            sudo -n apt-get update -qq
-            sudo -n apt-get install -y -qq mingw-w64 wine64 wine xz-utils unzip ffmpeg zip curl python3 > /dev/null
-          fi
-      - uses: actions/setup-dotnet@v4
-        with: { dotnet-version: "8.0.x" }
+          # the self-hosted runner has these installed by hand
+          for c in x86_64-w64-mingw32-gcc wine64 xz unzip zip ffmpeg python3 curl dotnet; do
+            command -v $c > /dev/null || { echo "the runner lacks $c"; exit 1; }
+          done
+          dotnet --version
       - name: "the bridge's tests (wine)"
         run: RBSTEMS_NO_SKIP= bridge/win/tests/run.sh
       - name: "the prepare helper's tests (wine)"
