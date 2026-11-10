@@ -1,6 +1,7 @@
 /* decode.c on Windows: a file as Windows rekordbox's separator reads it (docs/windows-port/PREPARE.md,
- * measured on rekordbox 7.2.14). 44.1 kHz only; other rates are skipped ("not supported on Windows
- * yet"): rekordbox's resampler is not reproduced exactly yet.
+ * measured on rekordbox 7.2.14). A file that isn't at 44.1 kHz goes through rekordbox's resampler as the
+ * x64 build has it (resample.c with one change, made by build.sh: PREPARE.md), which needs a processor
+ * with FMA; without one such a file is skipped.
  *   MP3         upstream's rb_mp3 (frame map + rekordbox's own libmpg123.dll, 16-bit / 32768)
  *   AAC (M4A)   Media Foundation's source reader asked for 16-bit PCM, / 32768
  *   FLAC        libFLAC;  WAV, AIFF: parsed here;  ALAC: not done yet
@@ -22,6 +23,8 @@ void tracks_free(tracks *ts) {
     ts->count = 0;
 }
 
+
+static size_t scat(char *d, const char *s, size_t n) { size_t l = strlen(d); snprintf(d + l, n - l, "%s", s); return strlen(d); }
 
 static int add_track(tracks *ts, float *s, size_t n) {
     if (ts->count == MAX_TRACKS) { big_free(s); return 1; }
@@ -457,7 +460,53 @@ done:
 /* alac_win.cpp: planar stereo float32, malloc'd (big_free is free here) */
 int alac_decode(FILE *f, float **out, size_t *n_out, int *rate, int *ch, char *why, size_t whyn);
 
-static size_t scat(char *d, const char *s, size_t n) { size_t l = strlen(d); snprintf(d + l, n - l, "%s", s); return strlen(d); }
+
+/* A rate other than 44.1 kHz: rekordbox resamples it. Ours is its x64 code path, whose fused multiply-adds need
+ * FMA (every x64 processor since 2013-2015 has it); what rekordbox does without it isn't known, so nothing is
+ * prepared there. */
+static int rate_refused(int rate, char *why, size_t whyn) {
+    if (rate < 8000 || rate > 200000 || rate % 50) { snprintf(why, whyn, "%d Hz: rekordbox's resampler doesn't take it", rate); return 1; }
+    if (!__builtin_cpu_supports("fma")) { snprintf(why, whyn, "%d Hz: this PC's processor can't run rekordbox's resampler as rekordbox does (no FMA)", rate); return 1; }
+    return 0;
+}
+
+static float *to_float(const track *t) {
+    float *s = big_alloc(sizeof(float) * 2 * (t->n ? t->n : 1));
+    if (!s) return NULL;
+    const float k = 1.0f / 32768.0f;
+    size_t ch = (size_t)t->ch, c1 = ch > 1 ? 1 : 0;
+    for (size_t i = 0; i < t->n; i++) {
+        s[i] = t->p16[i * ch] * k;
+        s[t->n + i] = t->p16[i * ch + c1] * k;
+    }
+    return s;
+}
+
+/* decode.c's last step: every track through rekordbox's resampler. 0, or 1 and why (ts freed). */
+static int to_44100(tracks *ts, int rate, char *why, size_t whyn) {
+    if (rate == 44100) return 0;
+    if (rate_refused(rate, why, whyn)) { tracks_free(ts); return 1; }
+    tracks out = *ts;
+    int bad = 0;
+    for (int i = 0; i < ts->count; i++) {
+        float *in = ts->t[i].s, *o = NULL;
+        size_t n = 0;
+        if (!in) in = to_float(&ts->t[i]);
+        if (!in || rb_resample(in, ts->t[i].n, rate, &o, &n)) bad = 1;
+        if (in && in != ts->t[i].s) big_free(in);
+        out.t[i] = (track){o, NULL, 2, 1, n};
+        if (bad) { out.count = i + (o != NULL); break; }
+    }
+    tracks_free(ts);
+    *ts = out;
+    if (bad) {
+        tracks_free(ts);
+        snprintf(why, whyn, "%d Hz: rekordbox's resampler doesn't take it", rate);
+        return 1;
+    }
+    scat(ts->how, ", rekordbox's resampler", sizeof ts->how);
+    return 0;
+}
 
 /* the files load_tracks refuses before decoding, and why: 0, or 1 and why */
 static int refused(const char *path, char *ext, size_t extn, probe_info *p, char *why, size_t whyn) {
@@ -474,7 +523,7 @@ static int refused(const char *path, char *ext, size_t extn, probe_info *p, char
     if (bad) { snprintf(why, whyn, "no audio stream Windows can read"); return 1; }
     if (p->kind == K_ALAC && p->ch > 2) { snprintf(why, whyn, "ALAC with %d channels: not supported on Windows yet", p->ch); return 1; }
     if (p->kind == K_AAC && p->ch > 2) { snprintf(why, whyn, "AAC with %d channels: rekordbox loads it but doesn't separate it", p->ch); return 1; }
-    if (p->rate != 44100) { snprintf(why, whyn, "%d Hz: not supported on Windows yet", p->rate); return 1; }
+    if (p->rate != 44100 && rate_refused(p->rate, why, whyn)) return 1;
     return 0;
 }
 
@@ -515,11 +564,11 @@ int load_tracks(const char *path, const char *rekordbox_app, tracks *ts, char *w
         size_t n = 0;
         int rate = 0, ch = 0;
         if (decode_aac(path, &pcm, &n, &rate, &ch, why, whyn)) return 1;
-        if (rate != 44100) { big_free(pcm); snprintf(why, whyn, "%d Hz: not supported on Windows yet", rate); return 1; }
         if (ch > 2) { big_free(pcm); snprintf(why, whyn, "AAC with %d channels: rekordbox loads it but doesn't separate it", ch); return 1; }
         ts->t[0] = (track){NULL, pcm, ch, 1, n};
         ts->count = 1;
-        snprintf(ts->how, sizeof ts->how, "Media Foundation, 16-bit, length %zu", n);
+        snprintf(ts->how, sizeof ts->how, "Media Foundation, 16-bit, %d Hz, length %zu", rate, n);
+        p.rate = rate;                                     /* what the decoder gives is what rekordbox resamples */
     } else if (p.kind == K_ALAC) {
         float *s = NULL;
         size_t n = 0;
@@ -528,8 +577,8 @@ int load_tracks(const char *path, const char *rekordbox_app, tracks *ts, char *w
         int bad = !f || alac_decode(f, &s, &n, &rate, &ch, why, whyn);
         if (f) fclose(f);
         if (bad) { if (!f) snprintf(why, whyn, "the file can't be opened"); return 1; }
-        if (rate != 44100) { free(s); snprintf(why, whyn, "%d Hz: not supported on Windows yet", rate); return 1; }
         add_track(ts, s, n);
+        p.rate = rate;
         snprintf(ts->how, sizeof ts->how, "alac %d Hz (Apple's open-source decoder)", rate);
     } else {
         float *s;
@@ -540,8 +589,7 @@ int load_tracks(const char *path, const char *rekordbox_app, tracks *ts, char *w
     }
     for (int i = 0; i < ts->count; i++)
         if (!ts->t[i].n) { tracks_free(ts); snprintf(why, whyn, "no audio"); return 1; }
-    (void)scat;
-    return 0;
+    return to_44100(ts, p.rate, why, whyn);
 }
 
 

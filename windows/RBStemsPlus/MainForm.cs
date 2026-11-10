@@ -150,6 +150,7 @@ public sealed class MainForm : Form, IAsk
         }
         Refresh2();
         setsTab.Reload();
+        prepareTab.LoadNames();
         refreshTimer.Start();
         if (State.Leftover(p) is { } left) log.Write($"an earlier run quit during \"{left.Label}\": check the lights, and run it again if needed");
         if (State.TakeReinstallRequest(p) is { } age && age < TimeSpan.FromHours(1)) reinstall.PerformClick();

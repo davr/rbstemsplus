@@ -101,6 +101,12 @@ expect 'grep -q "\"result\":\"ready\",\"entries\":2" <<< "$est2"' "estimate afte
 run3="$(prep "${common[@]}" --cache "$(P "$cache")" --kept-dir "$(P "$kdir")" --no-keep "$aif")"
 expect 'grep -q "\"written\":0,\"already\":2" <<< "$run3"' "the AIFF gives the WAV's entries: $run3"
 
+# 48 kHz goes through rekordbox's resampler as its x64 build has it: the key an independent implementation computes
+k48="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["keys"][0])' "$scratch/audio/b48.expected.json")"
+run48="$(prep "${common[@]}" --cache "$(P "$cache")" --kept-dir "$(P "$kdir")" --no-keep "$(P "$scratch/audio/b48.wav")")"
+expect 'grep -q "\"result\":\"prepared\",\"written\":1,\"already\":0" <<< "$run48" && grep -q "pcm 48000 Hz, rekordbox.s resampler" <<< "$run48"' "a 48 kHz WAV is prepared through the resampler: $run48"
+expect '[ -f "$cache/$ours/${k48:0:2}/$k48.flac" ]' "48 kHz: entry $k48 (the key from an independent resampler) is in the cache"
+
 # ALAC (Apple's decoder) and FLAC (libFLAC) are lossless: the same samples, so the same entries
 if command -v ffmpeg > /dev/null; then
   ffmpeg -v error -y -i "$scratch/audio/a.wav" -c:a alac "$scratch/audio/a.m4a" && ffmpeg -v error -y -i "$scratch/audio/a.wav" -c:a flac "$scratch/audio/a.flac"

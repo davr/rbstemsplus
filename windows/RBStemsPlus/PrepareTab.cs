@@ -79,6 +79,14 @@ sealed class PrepareTab : UserControl
 
     void Post(Action a) => Ui.Post(this, log, "prepare", a);
 
+    /// Reads the playlists if they haven't been read (the Status tab names the prepared playlists by them).
+    public void LoadNames()
+    {
+        if (listLoaded || listLoading) return;
+        facts = PrepareEnv.Facts(p, saved());
+        if (facts.HelperThere && Prepare.Problems(facts).Count == 0) LoadPlaylists();
+    }
+
     /// Work off the window's thread. An error in it is logged with its stack, then failed runs on the window's thread.
     void Background(string what, Action failed, Action work) => Task.Run(() =>
     {
@@ -110,6 +118,7 @@ sealed class PrepareTab : UserControl
                 listLoaded = true;
                 playlists = list;
                 DrawTree();
+                SetsChanged?.Invoke();                         // the Status tab shows the sets by these names
             });
         });
     }

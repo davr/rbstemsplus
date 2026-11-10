@@ -153,7 +153,13 @@ sed 's/|| fail(R->CreateSession(/|| fail(rbp_cuda_options(R, o), why, whyn) || f
 [ "$(grep -c 'rbp_cuda_options(R, o)' "$obj/model_cuda.c")" = 1 ] || { echo "helper/model.c changed: the CUDA insertion point no longer matches" >&2; exit 1; }
 cc -Dmodel_load_ort=cpu_model_load_ort -Dmodel_open=cpu_model_open -Dmodel_close=cpu_model_close -Dmodel_run=cpu_model_run -c "$obj/model_cpu.c" -o "$obj/model_cpu.o"
 cc -Dmodel_load_ort=cuda_model_load_ort -Dmodel_open=cuda_model_open -Dmodel_close=cuda_model_close -Dmodel_run=cuda_model_run -c "$obj/model_cuda.c" -o "$obj/model_cuda.o"
-cc -ffp-contract=off -c "$hs/resample.c" -o "$obj/resample.o"          # rekordbox's fused multiply-adds only where it has them
+# resample.c: rekordbox's resampler as its x64 build has it (docs/windows-port/PREPARE.md: measured bit for bit at
+# 48 kHz). In the convolution each pair's first tap is a fused multiply-add and its second a multiply then an add (on
+# arm64 both are fused): one sed line. -mfma so each fmaf() is the processor's own fused multiply-add (decode_win.c
+# doesn't call this code on a processor without FMA); -ffp-contract=off so nothing else is fused.
+sed 's|al = fmaf(h\[b\], x\[b\].l, al); ar = fmaf(h\[b\], x\[b\].r, ar);|al = al + h[b] * x[b].l; ar = ar + h[b] * x[b].r;|' "$hs/resample.c" > "$obj/resample_x64.c"
+[ "$(grep -c 'al = al + h\[b\] \* x\[b\].l; ar = ar + h\[b\] \* x\[b\].r;' "$obj/resample_x64.c")" = 1 ] && [ "$(grep -c 'fmaf(h\[b\]' "$obj/resample_x64.c")" = 0 ] && [ "$(grep -c 'fmaf(h\[a\]' "$obj/resample_x64.c")" = 2 ]   || { echo "helper/resample.c changed: its convolution no longer matches helper/win/build.sh's" >&2; exit 1; }
+cc -I"$hs" -ffp-contract=off -mfma -c "$obj/resample_x64.c" -o "$obj/resample.o"
 for f in mp3 mp4 manifest entry; do cc -c "$hs/$f.c" -o "$obj/$f.o"; done
 for f in decode_win kept_win library_win big_win readable_win glue_win cuda_win; do cc -c "$here/$f.c" -o "$obj/$f.o"; done
 # Apple's ALAC decoder: its own warnings aren't ours (multi-character constants, old C++)
